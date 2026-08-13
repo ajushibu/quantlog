@@ -28,8 +28,20 @@ const Icon = {
   palette: (c, s = 15) => (<svg width={s} height={s} viewBox="0 0 16 16" fill="none"><path d="M8 1.5A6.5 6.5 0 108 14.5c1 0 1.4-.6 1.4-1.2 0-.5-.3-.8-.3-1.2 0-.6.5-1 1.1-1H11a3.5 3.5 0 003.5-3.5C14.5 4 11.6 1.5 8 1.5z" stroke={c} strokeWidth="1.3" strokeLinejoin="round" /><circle cx="5" cy="7" r=".9" fill={c} /><circle cx="7.2" cy="4.6" r=".9" fill={c} /><circle cx="10.2" cy="5.2" r=".9" fill={c} /></svg>),
 };
 
+
+/* Every change carries a timestamp so the server can merge two devices'
+   edits instead of one silently overwriting the other. */
+const stampItem = (state, key, id) => ({
+  ...state,
+  meta: { ...(state.meta || {}), [key]: { ...((state.meta || {})[key] || {}), [id]: Date.now() } },
+});
+const stampField = (state, field) => ({
+  ...state,
+  meta: { ...(state.meta || {}), [field]: Date.now() },
+});
+
 function defaultState() {
-  return { settings: { revisionDays: [0] }, items: {}, flags: {}, log: [], digest: "", digestDate: "" };
+  return { settings: { revisionDays: [0] }, items: {}, flags: {}, log: [], digest: "", digestDate: "", meta: {} };
 }
 
 const itemDone = (st, it) => { const v = st.items[it.id] || {}; return it.kind === "s" ? !!(v.l1 && v.l2) : !!v.v; };
@@ -109,6 +121,9 @@ export default function App() {
   /* Debounced persistence: instant UI, one write per burst of changes.
      syncStatus: "" | "saving" | "saved" | "error" */
   const [syncStatus, setSyncStatus] = useState("");
+  const syncStatusRef = useRef("");
+  const lastSeenRef = useRef(null);
+  useEffect(() => { syncStatusRef.current = syncStatus; }, [syncStatus]);
   const saveTimer = useRef(null);
   const latestState = useRef(null);
   const flush = async () => {
@@ -116,15 +131,20 @@ export default function App() {
     const snapshot = latestState.current;
     setSyncStatus("saving");
     try {
-      await api.putState(snapshot);
-      if (latestState.current === snapshot) { setSyncStatus("saved"); setTimeout(() => setSyncStatus((s) => (s === "saved" ? "" : s)), 1500); }
+      const res = await api.putState(snapshot);
+      if (latestState.current === snapshot) {
+        if (res?.data) { setState(res.data); latestState.current = null; }
+        if (res?.updated_at) lastSeenRef.current = res.updated_at;
+        setSyncStatus("saved");
+        setTimeout(() => setSyncStatus((s) => (s === "saved" ? "" : s)), 1500);
+      }
     } catch (e) { console.error(e); setSyncStatus("error"); }
   };
   const persist = (next) => {
     setState(next);
     latestState.current = next;
     clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(flush, 600);
+    saveTimer.current = setTimeout(() => { saveTimer.current = null; flush(); }, 600);
   };
   useEffect(() => () => { clearTimeout(saveTimer.current); }, []);
   const [authErr, setAuthErr] = useState("");
@@ -138,29 +158,43 @@ export default function App() {
     if (c) tryAuth(c); else setAuthed(false);
   }, []);
 
-  /* When the app regains focus (switching from iPad to laptop, reopening the
-     PWA), silently pull fresh data so the two devices don't drift. Skipped
-     while a local save is pending so we never clobber unsent changes. */
+  /* Live sync. Two devices stay current via (a) a poll while the tab is
+     visible, (b) an immediate refetch when the app regains focus. Pulls are
+     skipped while a local save is in flight so we never overwrite unsent
+     edits; the server merges by timestamp, so neither device clobbers the
+     other. */
+  const pullingRef = useRef(false);
+  const pull = async () => {
+    if (!getCode() || pullingRef.current) return;
+    if (saveTimer.current || syncStatusRef.current === "saving") return; // local edits pending
+    pullingRef.current = true;
+    try {
+      const [s, g] = await Promise.all([api.getState(), api.listStruggles()]);
+      if (saveTimer.current || syncStatusRef.current === "saving") return; // raced with an edit
+      if (s?.updated_at && s.updated_at === lastSeenRef.current) return;   // nothing new
+      lastSeenRef.current = s?.updated_at || lastSeenRef.current;
+      setState({ ...defaultState(), ...(s?.data || {}) });
+      setStruggles(g.struggles.map((r) => ({
+        id: r.id, text: r.text_body, topicId: r.topic_id, date: r.filed_on,
+        answerText: r.answer_text, hasPhoto: r.has_photo, hasAnsPhoto: r.has_ans_photo,
+        retired: r.retired, lastTried: r.last_tried, keepCount: r.keep_count,
+      })));
+    } catch { /* offline: keep showing local data */ }
+    finally { pullingRef.current = false; }
+  };
+
   useEffect(() => {
-    const onFocus = async () => {
-      if (!getCode() || document.visibilityState !== "visible") return;
-      if (latestState.current && syncStatus === "saving") return;
-      try {
-        const s = await api.getState();
-        const g = await api.listStruggles();
-        if (!saveTimer.current || syncStatus !== "saving") {
-          setState((prev) => ({ ...defaultState(), ...(s || {}) }));
-          setStruggles(g.struggles.map((r) => ({
-            id: r.id, text: r.text_body, topicId: r.topic_id, date: r.filed_on,
-            answerText: r.answer_text, hasPhoto: r.has_photo, hasAnsPhoto: r.has_ans_photo,
-            retired: r.retired, lastTried: r.last_tried, keepCount: r.keep_count,
-          })));
-        }
-      } catch { /* offline — keep local view */ }
+    if (!authed) return;
+    const onVis = () => { if (document.visibilityState === "visible") pull(); };
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("online", pull);
+    const iv = setInterval(() => { if (document.visibilityState === "visible") pull(); }, 12000);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("online", pull);
+      clearInterval(iv);
     };
-    document.addEventListener("visibilitychange", onFocus);
-    return () => document.removeEventListener("visibilitychange", onFocus);
-  }, [syncStatus]);
+  }, [authed]);
 
   /* keep the browser / PWA status bar color matched to the active theme */
   useEffect(() => {
@@ -174,7 +208,8 @@ export default function App() {
     try {
       const s = await api.getState();
       const g = await api.listStruggles();
-      setState({ ...defaultState(), ...(s || {}) });
+      lastSeenRef.current = s?.updated_at || null;
+      setState({ ...defaultState(), ...(s?.data || {}) });
       setStruggles(g.struggles.map((r) => ({
         id: r.id, text: r.text_body, topicId: r.topic_id, date: r.filed_on,
         answerText: r.answer_text, hasPhoto: r.has_photo, hasAnsPhoto: r.has_ans_photo,
@@ -357,14 +392,15 @@ function Study({ state, persist, struggles, setStruggles, now, T }) {
   const isRevisionDay = state.settings.revisionDays.includes(now.getDay());
   const streak = streakDays(state);
 
-  const logAct = (next, type) => ({ ...next, log: [...state.log, { date: today, type }] });
+  const logAct = (next, type) => ({ ...next, log: [...state.log, { date: today, type, seq: Date.now() }] });
   const toggle = (id, key) => {
     const cur = state.items[id] || {};
     const val = !cur[key];
-    const next = { ...state, items: { ...state.items, [id]: { ...cur, [key]: val } } };
+    let next = { ...state, items: { ...state.items, [id]: { ...cur, [key]: val } } };
+    next = stampItem(next, "items", id);
     persist(val ? logAct(next, key) : next);
   };
-  const toggleFlag = (id) => persist({ ...state, flags: { ...state.flags, [id]: !state.flags[id] } });
+  const toggleFlag = (id) => persist(stampItem({ ...state, flags: { ...state.flags, [id]: !state.flags[id] } }, "flags", id));
 
   return (
     <>
@@ -555,7 +591,7 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
   };
   const retire = (id) => update(id, { retired: true, lastTried: today });
   const keep = (id) => { const s = struggles.find((x) => x.id === id); update(id, { lastTried: today, keepCount: (s?.keepCount || 0) + 1 }); };
-  const unflag = (id) => persist({ ...state, flags: { ...state.flags, [id]: false }, log: [...state.log, { date: today, type: "revision" }] });
+  const unflag = (id) => persist(stampItem({ ...state, flags: { ...state.flags, [id]: false }, log: [...state.log, { date: today, type: "revision", seq: Date.now() }] }, "flags", id));
 
   const doExport = async () => { setExporting(true); try { await exportRevisionDoc(filtered, flagged); } catch (e) { console.error(e); } setExporting(false); };
 
@@ -687,7 +723,7 @@ function Dashboard({ state, persist, struggles, now, T }) {
       const binStr = Object.entries(wbins).map(([id, n]) => `${ITEM_BY_ID[id]?.name || "Other"}: ${n}`).join(", ");
       const summary = `Activity events this week: ${acts.length}. Progress: ${perSection}. New struggle notes this week: ${binStr || "none"}. Revision queue size: ${queueN}. Exam Nov 29. Today ${dayKey(now)}.`;
       const r = await api.digest(summary);
-      await persist({ ...state, digest: r.digest, digestDate: dayKey(now) });
+      await persist(stampField({ ...state, digest: r.digest, digestDate: dayKey(now) }, "digest"));
       setDigestErr("");
     } catch (e) { console.error(e); setDigestErr("Couldn't reach the AI — try again in a moment."); }
     setDigestBusy(false);
@@ -697,7 +733,7 @@ function Dashboard({ state, persist, struggles, now, T }) {
     const cur = state.settings.revisionDays;
     const next = cur.includes(d) ? cur.filter((x) => x !== d) : [...cur, d].slice(-2);
     if (!next.length) return;
-    persist({ ...state, settings: { ...state.settings, revisionDays: next } });
+    persist(stampField({ ...state, settings: { ...state.settings, revisionDays: next } }, "settings"));
   };
 
   return (
