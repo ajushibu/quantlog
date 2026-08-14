@@ -430,7 +430,7 @@ function Study({ state, persist, struggles, setStruggles, now, T }) {
       for (const cl of clustersContaining(id)) {
         if (clusterDone(next, cl) && !next.celebrated?.[cl.id]) {
           next = stampItem({ ...next, celebrated: { ...next.celebrated, [cl.id]: true } }, "celebrated", cl.id);
-          setCelebration({ name: cl.name });
+          setCelebration({ name: cl.name, section: (SECTIONS.find((s) => CLUSTERS_BY_SECTION[s.id].some((c) => c.id === cl.id)) || {}).name });
           break;
         }
       }
@@ -776,17 +776,7 @@ function Dashboard({ state, persist, struggles, now, T }) {
 
   return (
     <>
-      <div className="card" style={{ padding: 20 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-          <div className="serif" style={{ fontSize: 18, fontWeight: 600 }}>Pace</div>
-          <span style={{ fontSize: 11.5, fontWeight: 700, color: tone.c, textShadow: `0 0 12px ${tone.c}55` }}>{tone.word}</span>
-        </div>
-        <div style={{ fontSize: 12, color: T.mut, marginBottom: 16 }}>Soft target: everything by Nov 8, leaving three weeks for revision and mocks. Judged weekly, never daily.</div>
-        <div style={{ display: "flex", gap: 10 }}>
-          <div style={{ flex: 1, fontSize: 12.5, color: T.mut, background: T.card2, borderRadius: 12, padding: 12, border: `1px solid ${T.line}` }}>Expected: ~{expected} · Actual: <span style={{ color: T.ink, fontWeight: 700 }}>{done}</span> of {total}</div>
-          <div style={{ flex: 1, fontSize: 12.5, color: T.mut, background: T.card2, borderRadius: 12, padding: 12, border: `1px solid ${T.line}` }}>Revision: <span style={{ color: T.ink, fontWeight: 700 }}>{cleared}</span> cleared · {queueN} in queue</div>
-        </div>
-      </div>
+      <PaceAnalyzer state={state} done={done} total={total} expected={expected} tone={tone} cleared={cleared} queueN={queueN} now={now} T={T} />
 
       <div className="card" style={{ padding: 20 }}>
         <div className="serif" style={{ fontSize: 18, fontWeight: 600, marginBottom: 14 }}>Sections</div>
@@ -851,59 +841,163 @@ function Dashboard({ state, persist, struggles, now, T }) {
         </div>
         <div style={{ fontSize: 10, color: T.dim, marginTop: 16 }}>Data lives in your own Supabase project, behind your access code. Photos are private and only ever fetched through the server.</div>
       </div>
+
+      <ResetCard state={state} persist={persist} T={T} />
     </>
+  );
+}
+
+/* Testing leaves fingerprints: ticked items she didn't do, and celebrations
+   already spent. Both are worth clearing before she starts for real. */
+function ResetCard({ state, persist, T }) {
+  const [confirming, setConfirming] = useState(null); // null | "celebrations" | "all"
+
+  const celebratedCount = Object.values(state.celebrated || {}).filter(Boolean).length;
+  const tickedCount = Object.keys(state.items || {}).filter((id) => {
+    const v = state.items[id] || {};
+    return v.v || v.l1 || v.l2;
+  }).length;
+
+  const resetCelebrations = () => {
+    let next = { ...state, celebrated: {} };
+    Object.keys(state.celebrated || {}).forEach((id) => { next = stampItem(next, "celebrated", id); });
+    persist(next);
+    setConfirming(null);
+  };
+
+  const resetAll = () => {
+    let next = { ...state, items: {}, flags: {}, celebrated: {}, log: [] };
+    Object.keys(state.items || {}).forEach((id) => { next = stampItem(next, "items", id); });
+    Object.keys(state.flags || {}).forEach((id) => { next = stampItem(next, "flags", id); });
+    Object.keys(state.celebrated || {}).forEach((id) => { next = stampItem(next, "celebrated", id); });
+    persist(next);
+    setConfirming(null);
+  };
+
+  const btn = (danger) => ({
+    background: T.card2, border: `1px solid ${danger ? T.accent2 + "66" : T.line}`,
+    borderRadius: 11, padding: "9px 14px", fontSize: 11.5, fontWeight: 700,
+    color: danger ? T.accent2 : T.mut,
+  });
+
+  return (
+    <div className="card" style={{ padding: 20 }}>
+      <div className="serif" style={{ fontSize: 18, fontWeight: 600, marginBottom: 2 }}>Clear test data</div>
+      <div style={{ fontSize: 12, color: T.mut, marginBottom: 14, lineHeight: 1.55 }}>
+        Anything ticked while setting this up will look like progress she didn't make, and any celebration already triggered won't play again for her. Clear both before handing it over.
+      </div>
+
+      {confirming === null && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button onClick={() => setConfirming("celebrations")} disabled={!celebratedCount} style={{ ...btn(false), opacity: celebratedCount ? 1 : 0.4 }}>
+            Reset celebrations{celebratedCount ? ` (${celebratedCount})` : ""}
+          </button>
+          <button onClick={() => setConfirming("all")} disabled={!tickedCount && !celebratedCount} style={{ ...btn(true), opacity: (tickedCount || celebratedCount) ? 1 : 0.4 }}>
+            Reset all progress{tickedCount ? ` (${tickedCount} ticked)` : ""}
+          </button>
+        </div>
+      )}
+
+      {confirming === "celebrations" && (
+        <div style={{ background: T.field, border: `1px solid ${T.line}`, borderRadius: 12, padding: 14 }}>
+          <div style={{ fontSize: 12.5, color: T.ink, lineHeight: 1.55, marginBottom: 12 }}>
+            Clear {celebratedCount} spent celebration{celebratedCount === 1 ? "" : "s"}? Ticked progress stays exactly as it is — these clusters will simply celebrate again when next completed.
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={resetCelebrations} style={{ ...btn(false), color: T.accent, borderColor: T.accent }}>Yes, reset them</button>
+            <button onClick={() => setConfirming(null)} style={btn(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {confirming === "all" && (
+        <div style={{ background: T.field, border: `1px solid ${T.accent2}55`, borderRadius: 12, padding: 14 }}>
+          <div style={{ fontSize: 12.5, color: T.ink, lineHeight: 1.55, marginBottom: 12 }}>
+            This wipes every ticked class and practice set ({tickedCount}), all bookmarks, the activity history, and all celebrations — a clean slate. Filed questions, mocks and revision history are <b>not</b> touched. This can't be undone.
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={resetAll} style={{ ...btn(true), background: T.accent2 + "22" }}>Yes, wipe progress</button>
+            <button onClick={() => setConfirming(null)} style={btn(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
 /* ---------------- Cluster completion celebration ---------------- */
 function ClusterCelebration({ data, onDone, T }) {
   useEffect(() => {
-    const t = setTimeout(onDone, 2400);
+    const t = setTimeout(onDone, 3200);
     return () => clearTimeout(t);
   }, []);
 
-  // deterministic-looking particle burst, no randomness needed to feel alive
-  const particles = Array.from({ length: 14 }, (_, i) => {
-    const angle = (360 / 14) * i + (i % 2 ? 8 : -6);
-    const dist = 62 + (i % 3) * 22;
-    const size = 4 + (i % 3) * 2;
-    const delay = (i % 5) * 18;
-    const rad = (angle * Math.PI) / 180;
-    return { x: Math.cos(rad) * dist, y: Math.sin(rad) * dist, size, delay, color: i % 3 === 0 ? T.gold : i % 3 === 1 ? T.accent : T.accent2 };
+  // falling confetti: rectangular pieces, mixed brand + neutral colours,
+  // each with its own drift, spin and delay so it never looks like a loop
+  const COLORS = [T.accent, T.accent2, T.gold, T.ink, "#2A2A2A", T.accent];
+  const pieces = Array.from({ length: 34 }, (_, i) => {
+    const seed = (i * 9301 + 49297) % 233280 / 233280;
+    const seed2 = (i * 4177 + 12345) % 233280 / 233280;
+    return {
+      left: (seed * 100).toFixed(1),
+      drift: (seed2 * 120 - 60).toFixed(0),
+      delay: (seed2 * 700).toFixed(0),
+      dur: (2100 + seed * 1400).toFixed(0),
+      spin: seed2 > 0.5 ? 720 : -540,
+      w: 5 + Math.round(seed * 4),
+      h: 9 + Math.round(seed2 * 6),
+      color: COLORS[i % COLORS.length],
+      round: i % 5 === 0,
+    };
   });
 
   return (
-    <button onClick={onDone} style={{
+    <button onClick={onDone} aria-label="dismiss" style={{
       position: "fixed", inset: 0, zIndex: 50, border: "none", cursor: "pointer",
-      background: "rgba(8,6,4,0.55)", backdropFilter: "blur(2px)",
-      display: "grid", placeItems: "center", padding: 20,
+      background: "rgba(8,6,4,0.72)", backdropFilter: "blur(3px)",
+      display: "grid", placeItems: "center", padding: 20, overflow: "hidden",
     }}>
       <style>{`
-        @keyframes burstOut { 0%{ transform: translate(0,0) scale(0.4); opacity:0 } 18%{ opacity:1 } 100%{ transform: translate(var(--dx), var(--dy)) scale(1); opacity:0 } }
-        @keyframes ringPulse { 0%{ transform: scale(.7); opacity:0 } 30%{ opacity:.9 } 100%{ transform: scale(1.6); opacity:0 } }
-        @keyframes cardPop { 0%{ transform: scale(.92); opacity:0 } 55%{ transform: scale(1.02); opacity:1 } 100%{ transform: scale(1); opacity:1 } }
-        @media (prefers-reduced-motion: reduce) { .burst-particle, .burst-ring { animation: none !important; opacity: 0 !important; } }
+        @keyframes fall {
+          0%   { transform: translate(0,-12vh) rotate(0deg); opacity: 0 }
+          8%   { opacity: 1 }
+          100% { transform: translate(var(--drift), 106vh) rotate(var(--spin)); opacity: 1 }
+        }
+        @keyframes riseIn {
+          0%   { transform: translateY(14px) scale(.96); opacity: 0 }
+          100% { transform: translateY(0) scale(1); opacity: 1 }
+        }
+        .confetti-piece { position: absolute; top: 0; will-change: transform; }
+        @media (prefers-reduced-motion: reduce) { .confetti-piece { display: none } }
       `}</style>
-      <div style={{ position: "relative", width: 1, height: 1 }}>
-        <div className="burst-ring" style={{ position: "absolute", left: -70, top: -70, width: 140, height: 140, borderRadius: "50%", border: `2px solid ${T.accent}`, animation: "ringPulse 1.1s ease-out forwards" }} />
-        {particles.map((p, i) => (
-          <div key={i} className="burst-particle" style={{
-            position: "absolute", left: -p.size / 2, top: -p.size / 2, width: p.size, height: p.size,
-            borderRadius: "50%", background: p.color, boxShadow: `0 0 8px ${p.color}`,
-            "--dx": `${p.x}px`, "--dy": `${p.y}px`,
-            animation: `burstOut 1.15s cubic-bezier(.2,.7,.3,1) ${p.delay}ms forwards`,
-          }} />
-        ))}
-      </div>
-      <div onClick={(e) => e.stopPropagation()} className="card" style={{
-        position: "relative", padding: "30px 34px", textAlign: "center", maxWidth: 300,
-        animation: "cardPop .5s cubic-bezier(.2,.8,.3,1) forwards", border: `1px solid ${T.gold}55`,
-        boxShadow: `0 0 50px ${T.accent}33`,
+
+      {pieces.map((p, i) => (
+        <span key={i} className="confetti-piece" style={{
+          left: `${p.left}%`, width: p.w, height: p.h, background: p.color,
+          borderRadius: p.round ? "50%" : 1,
+          "--drift": `${p.drift}px`, "--spin": `${p.spin}deg`,
+          animation: `fall ${p.dur}ms cubic-bezier(.25,.6,.5,1) ${p.delay}ms forwards`,
+        }} />
+      ))}
+
+      <div onClick={(e) => e.stopPropagation()} style={{
+        position: "relative", textAlign: "center", maxWidth: 320,
+        animation: "riseIn .55s cubic-bezier(.2,.8,.3,1) forwards",
       }}>
-        <div style={{ fontSize: 10, letterSpacing: "0.2em", color: T.dim, fontWeight: 700, marginBottom: 10 }}>CLUSTER COMPLETE</div>
-        <div className="serif" style={{ fontSize: 22, fontWeight: 600, color: T.gold, lineHeight: 1.25 }}>{data.name}</div>
-        <div style={{ fontSize: 12.5, color: T.mut, fontWeight: 500, marginTop: 12, lineHeight: 1.5 }}>Classes and both question sets — all done.</div>
-        <div style={{ fontSize: 10.5, color: T.dim, marginTop: 16 }}>tap anywhere to continue</div>
+        <div style={{ fontSize: 10, letterSpacing: "0.24em", color: T.mut, fontWeight: 600 }}>
+          {data.section ? data.section.toUpperCase() : "SECTION"}
+        </div>
+        <div className="serif" style={{ fontSize: 34, fontWeight: 600, color: T.ink, margin: "10px 0 6px", lineHeight: 1.1 }}>
+          {data.name}
+        </div>
+        <div style={{ fontSize: 13, color: T.mut, fontWeight: 500, lineHeight: 1.55 }}>
+          Classes and both question sets — complete.
+        </div>
+        <div style={{
+          marginTop: 22, display: "inline-block", padding: "11px 26px", borderRadius: 99,
+          background: `linear-gradient(90deg, ${T.accent}, ${T.accent2})`, color: T.onAccent,
+          fontSize: 12.5, fontWeight: 700, boxShadow: `0 0 24px ${T.accent}44`,
+        }} onClick={onDone}>Keep going</div>
       </div>
     </button>
   );
@@ -1102,6 +1196,125 @@ function MockCard({ m, onRemove, T }) {
           <button onClick={onRemove} style={{ marginTop: 12, background: "none", border: "none", fontSize: 11, color: T.dim, fontWeight: 600, padding: 0 }}>Delete this mock</button>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ================================================================
+   PACE ANALYZER — collapsed by default. Opens only when asked.
+   ================================================================ */
+function PaceAnalyzer({ state, done, total, expected, tone, cleared, queueN, now, T }) {
+  const [open, setOpen] = useState(false);
+
+  /* Projection uses recent behaviour, not lifetime average, because a slow
+     first fortnight shouldn't haunt the estimate forever. We measure items
+     completed in the last 21 days and extrapolate. */
+  const proj = (() => {
+    const stamps = Object.values(state.meta?.items || {}).filter(Boolean).sort((a, b) => a - b);
+    if (stamps.length < 3) return { ok: false, reason: "Not enough activity yet — a few more days of data will make this meaningful." };
+
+    const windowMs = 21 * 864e5;
+    const cutoff = now.getTime() - windowMs;
+    const recent = stamps.filter((t) => t >= cutoff);
+    const firstEver = stamps[0];
+    const spanDays = Math.max(1, (now.getTime() - Math.max(firstEver, cutoff)) / 864e5);
+    const perDay = recent.length / spanDays;
+
+    if (perDay <= 0.01) return { ok: false, reason: "No items completed in the last three weeks, so there's no current pace to project from." };
+
+    const remaining = total - done;
+    const daysNeeded = Math.ceil(remaining / perDay);
+    const finish = new Date(now.getTime() + daysNeeded * 864e5);
+    const daysToExam = Math.ceil((EXAM_DATE - now) / 864e5);
+    return {
+      ok: true, perDay, daysNeeded, finish, remaining,
+      beatsExam: daysNeeded <= daysToExam,
+      slackDays: daysToExam - daysNeeded,
+    };
+  })();
+
+  const fmt = (d) => d.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+
+  return (
+    <div className="card" style={{ padding: open ? 20 : 0, overflow: "hidden" }}>
+      {!open ? (
+        <button onClick={() => setOpen(true)} style={{
+          width: "100%", background: "none", border: "none", color: T.ink,
+          padding: "18px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, textAlign: "left",
+        }}>
+          <div>
+            <div className="serif" style={{ fontSize: 18, fontWeight: 600 }}>Pace analyzer</div>
+            <div style={{ fontSize: 12, color: T.mut, marginTop: 3 }}>Projected finish date and current rate. Hidden until you ask.</div>
+          </div>
+          <span style={{ fontSize: 11.5, fontWeight: 700, color: T.accent, border: `1px solid ${T.line}`, borderRadius: 99, padding: "7px 14px", flexShrink: 0 }}>Analyze</span>
+        </button>
+      ) : (
+        <>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+            <div className="serif" style={{ fontSize: 18, fontWeight: 600 }}>Pace analyzer</div>
+            <button onClick={() => setOpen(false)} style={{ background: "none", border: "none", fontSize: 11.5, color: T.dim, fontWeight: 600 }}>Hide</button>
+          </div>
+
+          {proj.ok ? (
+            <>
+              <div style={{ background: T.field, border: `1px solid ${T.line}`, borderRadius: 16, padding: "20px 18px", textAlign: "center" }}>
+                <div style={{ fontSize: 9.5, letterSpacing: "0.18em", color: T.dim, fontWeight: 700 }}>AT THE CURRENT RATE, DONE BY</div>
+                <div className="serif" style={{ fontSize: 27, fontWeight: 600, color: proj.beatsExam ? T.gold : T.accent2, margin: "9px 0 4px" }}>
+                  {fmt(proj.finish)}
+                </div>
+                <div style={{ fontSize: 12, color: T.mut, fontWeight: 500 }}>
+                  {proj.beatsExam
+                    ? `${proj.slackDays} day${proj.slackDays === 1 ? "" : "s"} of room before the exam`
+                    : `${Math.abs(proj.slackDays)} day${Math.abs(proj.slackDays) === 1 ? "" : "s"} past the exam at this rate`}
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                <Stat label="CURRENT RATE" value={`${proj.perDay.toFixed(1)}`} sub="items / day" T={T} />
+                <Stat label="REMAINING" value={`${proj.remaining}`} sub={`of ${total}`} T={T} />
+                <Stat label="VS PLAN" value={done >= expected ? `+${done - expected}` : `${done - expected}`} sub="items" T={T} color={tone.c} />
+              </div>
+
+              {!proj.beatsExam && (
+                <div style={{ marginTop: 12, fontSize: 12.5, color: T.mut, lineHeight: 1.55, background: T.card2, border: `1px solid ${T.line}`, borderRadius: 12, padding: 13 }}>
+                  To land it by Nov 8 she'd need about{" "}
+                  <span style={{ color: T.ink, fontWeight: 700 }}>
+                    {(proj.remaining / Math.max(1, Math.ceil((TARGET - now) / 864e5))).toFixed(1)}
+                  </span>{" "}
+                  items a day. Worth deciding whether to raise the rate or trim what's in scope — both are reasonable answers.
+                </div>
+              )}
+            </>
+          ) : (
+            <div style={{ fontSize: 13, color: T.mut, lineHeight: 1.6, background: T.field, border: `1px solid ${T.line}`, borderRadius: 14, padding: 16 }}>
+              {proj.reason}
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+            <div style={{ flex: 1, fontSize: 12.5, color: T.mut, background: T.card2, borderRadius: 12, padding: 12, border: `1px solid ${T.line}` }}>
+              Expected by today: ~{expected} · Actual: <span style={{ color: T.ink, fontWeight: 700 }}>{done}</span>
+            </div>
+            <div style={{ flex: 1, fontSize: 12.5, color: T.mut, background: T.card2, borderRadius: 12, padding: 12, border: `1px solid ${T.line}` }}>
+              Revision: <span style={{ color: T.ink, fontWeight: 700 }}>{cleared}</span> cleared · {queueN} queued
+            </div>
+          </div>
+
+          <div style={{ fontSize: 10.5, color: T.dim, marginTop: 12, lineHeight: 1.5 }}>
+            Projection is based on the last three weeks of activity, so it moves as she does. Early on it swings wildly — treat it as a direction, not a deadline.
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function Stat({ label, value, sub, T, color }) {
+  return (
+    <div style={{ flex: 1, background: T.card2, border: `1px solid ${T.line}`, borderRadius: 12, padding: "12px 8px", textAlign: "center" }}>
+      <div style={{ fontSize: 8.5, letterSpacing: "0.12em", color: T.dim, fontWeight: 700 }}>{label}</div>
+      <div className="serif" style={{ fontSize: 20, fontWeight: 700, color: color || T.ink, marginTop: 4 }}>{value}</div>
+      <div style={{ fontSize: 10, color: T.mut, marginTop: 1 }}>{sub}</div>
     </div>
   );
 }
