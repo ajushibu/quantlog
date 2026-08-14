@@ -498,13 +498,12 @@ function MiniRing({ pct, done, T }) {
 function ClassRow({ it, state, onToggle, onFlag, T }) {
   const v = state.items[it.id] || {};
   const done = !!v.v;
-  const isDrill = it.kind === "d";
   return (
     <div className={done ? "completed-pop" : ""} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 8px", borderRadius: 13, background: done ? T.card2 : "transparent", border: `1px solid ${done ? T.accent2 + "40" : "transparent"}` }}>
       <button onClick={() => onToggle(it.id, "v")} style={{ width: 24, height: 24, borderRadius: 8, flexShrink: 0, border: `1.5px solid ${done ? T.accent : T.line}`, background: done ? `linear-gradient(90deg, ${T.accent}, ${T.accent2})` : "transparent", display: "grid", placeItems: "center", boxShadow: done ? `0 0 8px ${T.accent}44` : "none" }}>
         {Icon.check(done ? T.onAccent : "transparent")}
       </button>
-      <span style={{ flex: 1, fontSize: 13.5, fontWeight: done ? 600 : 500, color: done ? T.gold : isDrill ? T.mut : T.ink, lineHeight: 1.3, fontStyle: isDrill ? "italic" : "normal", opacity: isDrill ? 0.85 : 1 }}>{it.name}</span>
+      <span style={{ flex: 1, fontSize: 13.5, fontWeight: done ? 600 : 500, color: done ? T.gold : T.ink, lineHeight: 1.3 }}>{it.name}</span>
       <button onClick={() => onFlag(it.id)} style={{ width: 28, height: 28, borderRadius: 9, border: "none", background: "transparent", display: "grid", placeItems: "center" }}>
         {state.flags[it.id] ? Icon.bookmarkFill(T.gold) : Icon.bookmark(T.line)}
       </button>

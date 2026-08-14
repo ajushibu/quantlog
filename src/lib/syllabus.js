@@ -7,8 +7,6 @@ const S = (id, name, items) => ({
 
 export const SECTIONS = [
   S("arith", "Arithmetic", [
-    ["d","Drill: Additions & Subtractions"],["d","Drill: Multiplications"],
-    ["d","Drill: Divisions, % Calculations & Ratio Comparisons"],["d","Drill: Squares & Cubes of Numbers"],
     ["c","Pre-requisites to Percentages"],["c","Basic Percentages"],["c","Successive %"],["c","Change of Base"],
     ["s","Percentages"],
     ["c","SI and CI"],["s","Interest"],
@@ -54,4 +52,4 @@ export const ALL_ITEMS = SECTIONS.flatMap((s) =>
   s.items.map((it) => ({ ...it, sectionId: s.id, sectionName: s.name }))
 );
 export const ITEM_BY_ID = Object.fromEntries(ALL_ITEMS.map((i) => [i.id, i]));
-export const CLASSIFY_LIST = ALL_ITEMS.filter((i) => i.kind !== "d");
+export const CLASSIFY_LIST = ALL_ITEMS;
