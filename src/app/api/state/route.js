@@ -24,6 +24,7 @@ function mergeState(remote, local) {
 
   const [items, itemsMeta] = mergeStamped(remote.items, local.items, rMeta.items || {}, lMeta.items || {});
   const [flags, flagsMeta] = mergeStamped(remote.flags, local.flags, rMeta.flags || {}, lMeta.flags || {});
+  const [celebrated, celebratedMeta] = mergeStamped(remote.celebrated, local.celebrated, rMeta.celebrated || {}, lMeta.celebrated || {});
 
   // log is append-only: union, de-duplicated
   const seen = new Set();
@@ -36,12 +37,12 @@ function mergeState(remote, local) {
   const newerLocal = (field) => (lMeta[field] || 0) >= (rMeta[field] || 0);
 
   return {
-    items, flags, log,
+    items, flags, celebrated, log,
     settings: (newerLocal("settings") ? local.settings : remote.settings) || local.settings || remote.settings,
     digest: newerLocal("digest") ? (local.digest ?? "") : (remote.digest ?? ""),
     digestDate: newerLocal("digest") ? (local.digestDate ?? "") : (remote.digestDate ?? ""),
     meta: {
-      items: itemsMeta, flags: flagsMeta,
+      items: itemsMeta, flags: flagsMeta, celebrated: celebratedMeta,
       settings: Math.max(rMeta.settings || 0, lMeta.settings || 0),
       digest: Math.max(rMeta.digest || 0, lMeta.digest || 0),
     },

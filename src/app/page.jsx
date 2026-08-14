@@ -40,8 +40,32 @@ const stampField = (state, field) => ({
   meta: { ...(state.meta || {}), [field]: Date.now() },
 });
 
+
+/* A "cluster" mirrors one book chapter: the classes leading up to a
+   practice set, plus that set. Percentages = its 4 classes + the
+   Percentages LOD1/LOD2 set, exactly as she described it. */
+function buildClusters(section) {
+  const clusters = [];
+  let run = [];
+  section.items.forEach((it) => {
+    if (it.kind === "s") { clusters.push({ id: `${section.id}-cl${clusters.length}`, name: it.name, classIds: run.map((c) => c.id), setId: it.id }); run = []; }
+    else run.push(it);
+  });
+  return clusters;
+}
+const CLUSTERS_BY_SECTION = Object.fromEntries(SECTIONS.map((s) => [s.id, buildClusters(s)]));
+const ALL_CLUSTERS = SECTIONS.flatMap((s) => CLUSTERS_BY_SECTION[s.id]);
+
+function clusterAllIds(cl) { return [...cl.classIds, cl.setId]; }
+function clusterDone(state, cl) {
+  return cl.classIds.every((id) => !!(state.items[id] || {}).v) && itemDone(state, ITEM_BY_ID[cl.setId]);
+}
+function clustersContaining(itemId) {
+  return ALL_CLUSTERS.filter((cl) => clusterAllIds(cl).includes(itemId));
+}
+
 function defaultState() {
-  return { settings: { revisionDays: [0] }, items: {}, flags: {}, log: [], digest: "", digestDate: "", meta: {} };
+  return { settings: { revisionDays: [0] }, items: {}, flags: {}, celebrated: {}, log: [], digest: "", digestDate: "", meta: {} };
 }
 
 const itemDone = (st, it) => { const v = st.items[it.id] || {}; return it.kind === "s" ? !!(v.l1 && v.l2) : !!v.v; };
@@ -391,6 +415,7 @@ function Study({ state, persist, struggles, setStruggles, now, T }) {
   const today = dayKey(now);
   const isRevisionDay = state.settings.revisionDays.includes(now.getDay());
   const streak = streakDays(state);
+  const [celebration, setCelebration] = useState(null); // { name, days } | null
 
   const logAct = (next, type) => ({ ...next, log: [...state.log, { date: today, type, seq: Date.now() }] });
   const toggle = (id, key) => {
@@ -398,7 +423,18 @@ function Study({ state, persist, struggles, setStruggles, now, T }) {
     const val = !cur[key];
     let next = { ...state, items: { ...state.items, [id]: { ...cur, [key]: val } } };
     next = stampItem(next, "items", id);
-    persist(val ? logAct(next, key) : next);
+    if (val) next = logAct(next, key);
+
+    if (val) {
+      for (const cl of clustersContaining(id)) {
+        if (clusterDone(next, cl) && !next.celebrated?.[cl.id]) {
+          next = stampItem({ ...next, celebrated: { ...next.celebrated, [cl.id]: true } }, "celebrated", cl.id);
+          setCelebration({ name: cl.name });
+          break;
+        }
+      }
+    }
+    persist(next);
   };
   const toggleFlag = (id) => persist(stampItem({ ...state, flags: { ...state.flags, [id]: !state.flags[id] } }, "flags", id));
 
@@ -414,6 +450,7 @@ function Study({ state, persist, struggles, setStruggles, now, T }) {
           <div style={{ fontSize: 8, letterSpacing: "0.16em", color: T.dim, fontWeight: 600 }}>DAY STREAK</div>
         </div>
       </div>
+      {celebration && <ClusterCelebration data={celebration} onDone={() => setCelebration(null)} T={T} />}
       {SECTIONS.map((s) => <SectionCard key={s.id} s={s} state={state} onToggle={toggle} onFlag={toggleFlag} T={T} />)}
       <StruggleBox state={state} persist={persist} struggles={struggles} setStruggles={setStruggles} today={today} T={T} />
     </>
@@ -814,5 +851,59 @@ function Dashboard({ state, persist, struggles, now, T }) {
         <div style={{ fontSize: 10, color: T.dim, marginTop: 16 }}>Data lives in your own Supabase project, behind your access code. Photos are private and only ever fetched through the server.</div>
       </div>
     </>
+  );
+}
+
+/* ---------------- Cluster completion celebration ---------------- */
+function ClusterCelebration({ data, onDone, T }) {
+  useEffect(() => {
+    const t = setTimeout(onDone, 2400);
+    return () => clearTimeout(t);
+  }, []);
+
+  // deterministic-looking particle burst, no randomness needed to feel alive
+  const particles = Array.from({ length: 14 }, (_, i) => {
+    const angle = (360 / 14) * i + (i % 2 ? 8 : -6);
+    const dist = 62 + (i % 3) * 22;
+    const size = 4 + (i % 3) * 2;
+    const delay = (i % 5) * 18;
+    const rad = (angle * Math.PI) / 180;
+    return { x: Math.cos(rad) * dist, y: Math.sin(rad) * dist, size, delay, color: i % 3 === 0 ? T.gold : i % 3 === 1 ? T.accent : T.accent2 };
+  });
+
+  return (
+    <button onClick={onDone} style={{
+      position: "fixed", inset: 0, zIndex: 50, border: "none", cursor: "pointer",
+      background: "rgba(8,6,4,0.55)", backdropFilter: "blur(2px)",
+      display: "grid", placeItems: "center", padding: 20,
+    }}>
+      <style>{`
+        @keyframes burstOut { 0%{ transform: translate(0,0) scale(0.4); opacity:0 } 18%{ opacity:1 } 100%{ transform: translate(var(--dx), var(--dy)) scale(1); opacity:0 } }
+        @keyframes ringPulse { 0%{ transform: scale(.7); opacity:0 } 30%{ opacity:.9 } 100%{ transform: scale(1.6); opacity:0 } }
+        @keyframes cardPop { 0%{ transform: scale(.92); opacity:0 } 55%{ transform: scale(1.02); opacity:1 } 100%{ transform: scale(1); opacity:1 } }
+        @media (prefers-reduced-motion: reduce) { .burst-particle, .burst-ring { animation: none !important; opacity: 0 !important; } }
+      `}</style>
+      <div style={{ position: "relative", width: 1, height: 1 }}>
+        <div className="burst-ring" style={{ position: "absolute", left: -70, top: -70, width: 140, height: 140, borderRadius: "50%", border: `2px solid ${T.accent}`, animation: "ringPulse 1.1s ease-out forwards" }} />
+        {particles.map((p, i) => (
+          <div key={i} className="burst-particle" style={{
+            position: "absolute", left: -p.size / 2, top: -p.size / 2, width: p.size, height: p.size,
+            borderRadius: "50%", background: p.color, boxShadow: `0 0 8px ${p.color}`,
+            "--dx": `${p.x}px`, "--dy": `${p.y}px`,
+            animation: `burstOut 1.15s cubic-bezier(.2,.7,.3,1) ${p.delay}ms forwards`,
+          }} />
+        ))}
+      </div>
+      <div onClick={(e) => e.stopPropagation()} className="card" style={{
+        position: "relative", padding: "30px 34px", textAlign: "center", maxWidth: 300,
+        animation: "cardPop .5s cubic-bezier(.2,.8,.3,1) forwards", border: `1px solid ${T.gold}55`,
+        boxShadow: `0 0 50px ${T.accent}33`,
+      }}>
+        <div style={{ fontSize: 10, letterSpacing: "0.2em", color: T.dim, fontWeight: 700, marginBottom: 10 }}>CLUSTER COMPLETE</div>
+        <div className="serif" style={{ fontSize: 22, fontWeight: 600, color: T.gold, lineHeight: 1.25 }}>{data.name}</div>
+        <div style={{ fontSize: 12.5, color: T.mut, fontWeight: 500, marginTop: 12, lineHeight: 1.5 }}>Classes and both question sets — all done.</div>
+        <div style={{ fontSize: 10.5, color: T.dim, marginTop: 16 }}>tap anywhere to continue</div>
+      </div>
+    </button>
   );
 }
