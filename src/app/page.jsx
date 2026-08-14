@@ -430,7 +430,7 @@ function Study({ state, persist, struggles, setStruggles, now, T }) {
       for (const cl of clustersContaining(id)) {
         if (clusterDone(next, cl) && !next.celebrated?.[cl.id]) {
           next = stampItem({ ...next, celebrated: { ...next.celebrated, [cl.id]: true } }, "celebrated", cl.id);
-          setCelebration({ name: cl.name, section: (SECTIONS.find((s) => CLUSTERS_BY_SECTION[s.id].some((c) => c.id === cl.id)) || {}).name });
+          setCelebration({ name: cl.name });
           break;
         }
       }
@@ -928,76 +928,62 @@ function ResetCard({ state, persist, T }) {
 /* ---------------- Cluster completion celebration ---------------- */
 function ClusterCelebration({ data, onDone, T }) {
   useEffect(() => {
-    const t = setTimeout(onDone, 3200);
+    const t = setTimeout(onDone, 2600);
     return () => clearTimeout(t);
   }, []);
 
-  // falling confetti: rectangular pieces, mixed brand + neutral colours,
-  // each with its own drift, spin and delay so it never looks like a loop
-  const COLORS = [T.accent, T.accent2, T.gold, T.ink, "#2A2A2A", T.accent];
-  const pieces = Array.from({ length: 34 }, (_, i) => {
-    const seed = (i * 9301 + 49297) % 233280 / 233280;
-    const seed2 = (i * 4177 + 12345) % 233280 / 233280;
+  // radial ember burst — three staggered rings of particles so it reads as a
+  // spray rather than a single ripple
+  const COUNT = 38;
+  const particles = Array.from({ length: COUNT }, (_, i) => {
+    const ring = i % 3;                       // 0 inner, 1 mid, 2 outer
+    const angle = (360 / COUNT) * i * 3 + ring * 14;
+    const dist = 54 + ring * 34 + (i % 5) * 8;
+    const size = ring === 2 ? 3 : ring === 1 ? 4.5 : 6;
+    const delay = ring * 55 + (i % 4) * 22;
+    const dur = 1000 + ring * 260;
+    const rad = (angle * Math.PI) / 180;
     return {
-      left: (seed * 100).toFixed(1),
-      drift: (seed2 * 120 - 60).toFixed(0),
-      delay: (seed2 * 700).toFixed(0),
-      dur: (2100 + seed * 1400).toFixed(0),
-      spin: seed2 > 0.5 ? 720 : -540,
-      w: 5 + Math.round(seed * 4),
-      h: 9 + Math.round(seed2 * 6),
-      color: COLORS[i % COLORS.length],
-      round: i % 5 === 0,
+      x: Math.cos(rad) * dist, y: Math.sin(rad) * dist, size, delay, dur,
+      color: i % 3 === 0 ? T.gold : i % 3 === 1 ? T.accent : T.accent2,
     };
   });
 
   return (
     <button onClick={onDone} aria-label="dismiss" style={{
       position: "fixed", inset: 0, zIndex: 50, border: "none", cursor: "pointer",
-      background: "rgba(8,6,4,0.72)", backdropFilter: "blur(3px)",
-      display: "grid", placeItems: "center", padding: 20, overflow: "hidden",
+      background: "rgba(8,6,4,0.6)", backdropFilter: "blur(2px)",
+      display: "grid", placeItems: "center", padding: 20,
     }}>
       <style>{`
-        @keyframes fall {
-          0%   { transform: translate(0,-12vh) rotate(0deg); opacity: 0 }
-          8%   { opacity: 1 }
-          100% { transform: translate(var(--drift), 106vh) rotate(var(--spin)); opacity: 1 }
-        }
-        @keyframes riseIn {
-          0%   { transform: translateY(14px) scale(.96); opacity: 0 }
-          100% { transform: translateY(0) scale(1); opacity: 1 }
-        }
-        .confetti-piece { position: absolute; top: 0; will-change: transform; }
-        @media (prefers-reduced-motion: reduce) { .confetti-piece { display: none } }
+        @keyframes burstOut { 0%{ transform: translate(0,0) scale(.35); opacity:0 } 16%{ opacity:1 } 100%{ transform: translate(var(--dx), var(--dy)) scale(1); opacity:0 } }
+        @keyframes ringPulse { 0%{ transform: scale(.6); opacity:0 } 28%{ opacity:.85 } 100%{ transform: scale(1.9); opacity:0 } }
+        @keyframes cardPop { 0%{ transform: scale(.93); opacity:0 } 58%{ transform: scale(1.02); opacity:1 } 100%{ transform: scale(1); opacity:1 } }
+        @media (prefers-reduced-motion: reduce) { .burst-particle, .burst-ring { animation: none !important; opacity: 0 !important } }
       `}</style>
 
-      {pieces.map((p, i) => (
-        <span key={i} className="confetti-piece" style={{
-          left: `${p.left}%`, width: p.w, height: p.h, background: p.color,
-          borderRadius: p.round ? "50%" : 1,
-          "--drift": `${p.drift}px`, "--spin": `${p.spin}deg`,
-          animation: `fall ${p.dur}ms cubic-bezier(.25,.6,.5,1) ${p.delay}ms forwards`,
-        }} />
-      ))}
+      <div style={{ position: "relative", width: 1, height: 1 }}>
+        <div className="burst-ring" style={{ position: "absolute", left: -70, top: -70, width: 140, height: 140, borderRadius: "50%", border: `2px solid ${T.accent}`, animation: "ringPulse 1.2s ease-out forwards" }} />
+        <div className="burst-ring" style={{ position: "absolute", left: -50, top: -50, width: 100, height: 100, borderRadius: "50%", border: `1.5px solid ${T.gold}`, animation: "ringPulse 1.4s ease-out .18s forwards" }} />
+        {particles.map((p, i) => (
+          <div key={i} className="burst-particle" style={{
+            position: "absolute", left: -p.size / 2, top: -p.size / 2, width: p.size, height: p.size,
+            borderRadius: "50%", background: p.color, boxShadow: `0 0 9px ${p.color}`,
+            "--dx": `${p.x}px`, "--dy": `${p.y}px`,
+            animation: `burstOut ${p.dur}ms cubic-bezier(.2,.7,.3,1) ${p.delay}ms forwards`,
+          }} />
+        ))}
+      </div>
 
-      <div onClick={(e) => e.stopPropagation()} style={{
-        position: "relative", textAlign: "center", maxWidth: 320,
-        animation: "riseIn .55s cubic-bezier(.2,.8,.3,1) forwards",
+      <div onClick={(e) => e.stopPropagation()} className="card" style={{
+        position: "relative", padding: "30px 34px", textAlign: "center", maxWidth: 300,
+        animation: "cardPop .5s cubic-bezier(.2,.8,.3,1) forwards", border: `1px solid ${T.gold}55`,
+        boxShadow: `0 0 50px ${T.accent}33`,
       }}>
-        <div style={{ fontSize: 10, letterSpacing: "0.24em", color: T.mut, fontWeight: 600 }}>
-          {data.section ? data.section.toUpperCase() : "SECTION"}
-        </div>
-        <div className="serif" style={{ fontSize: 34, fontWeight: 600, color: T.ink, margin: "10px 0 6px", lineHeight: 1.1 }}>
-          {data.name}
-        </div>
-        <div style={{ fontSize: 13, color: T.mut, fontWeight: 500, lineHeight: 1.55 }}>
-          Classes and both question sets — complete.
-        </div>
-        <div style={{
-          marginTop: 22, display: "inline-block", padding: "11px 26px", borderRadius: 99,
-          background: `linear-gradient(90deg, ${T.accent}, ${T.accent2})`, color: T.onAccent,
-          fontSize: 12.5, fontWeight: 700, boxShadow: `0 0 24px ${T.accent}44`,
-        }} onClick={onDone}>Keep going</div>
+        <div style={{ fontSize: 10, letterSpacing: "0.2em", color: T.dim, fontWeight: 700, marginBottom: 10 }}>CLUSTER COMPLETE</div>
+        <div className="serif" style={{ fontSize: 22, fontWeight: 600, color: T.gold, lineHeight: 1.25 }}>{data.name}</div>
+        <div style={{ fontSize: 12.5, color: T.mut, fontWeight: 500, marginTop: 12, lineHeight: 1.5 }}>Classes and both question sets — all done.</div>
+        <div style={{ fontSize: 10.5, color: T.dim, marginTop: 16 }}>tap anywhere to continue</div>
       </div>
     </button>
   );
@@ -1210,7 +1196,12 @@ function PaceAnalyzer({ state, done, total, expected, tone, cleared, queueN, now
      first fortnight shouldn't haunt the estimate forever. We measure items
      completed in the last 21 days and extrapolate. */
   const proj = (() => {
-    const stamps = Object.values(state.meta?.items || {}).filter(Boolean).sort((a, b) => a - b);
+    // only count timestamps for items that are STILL completed — unticking
+    // during testing used to leave a stale stamp and inflate the rate
+    const stamps = Object.entries(state.meta?.items || {})
+      .filter(([id, t]) => t && ITEM_BY_ID[id] && itemDone(state, ITEM_BY_ID[id]))
+      .map(([, t]) => t)
+      .sort((a, b) => a - b);
     if (stamps.length < 3) return { ok: false, reason: "Not enough activity yet — a few more days of data will make this meaningful." };
 
     const windowMs = 21 * 864e5;
