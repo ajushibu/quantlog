@@ -36,14 +36,20 @@ function mergeState(remote, local) {
 
   const newerLocal = (field) => (lMeta[field] || 0) >= (rMeta[field] || 0);
 
+  // mocks: union by id so a mock logged on one device is never lost
+  const mockMap = new Map();
+  [...(remote.mocks || []), ...(local.mocks || [])].forEach((m) => { if (m && m.id) mockMap.set(m.id, m); });
+  const mocks = [...mockMap.values()];
+
   return {
-    items, flags, celebrated, log,
+    items, flags, celebrated, mocks, log,
     settings: (newerLocal("settings") ? local.settings : remote.settings) || local.settings || remote.settings,
     digest: newerLocal("digest") ? (local.digest ?? "") : (remote.digest ?? ""),
     digestDate: newerLocal("digest") ? (local.digestDate ?? "") : (remote.digestDate ?? ""),
     meta: {
       items: itemsMeta, flags: flagsMeta, celebrated: celebratedMeta,
       settings: Math.max(rMeta.settings || 0, lMeta.settings || 0),
+      mocks: Math.max(rMeta.mocks || 0, lMeta.mocks || 0),
       digest: Math.max(rMeta.digest || 0, lMeta.digest || 0),
     },
   };

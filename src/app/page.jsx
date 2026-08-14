@@ -65,7 +65,7 @@ function clustersContaining(itemId) {
 }
 
 function defaultState() {
-  return { settings: { revisionDays: [0] }, items: {}, flags: {}, celebrated: {}, log: [], digest: "", digestDate: "", meta: {} };
+  return { settings: { revisionDays: [0] }, items: {}, flags: {}, celebrated: {}, mocks: [], log: [], digest: "", digestDate: "", meta: {} };
 }
 
 const itemDone = (st, it) => { const v = st.items[it.id] || {}; return it.kind === "s" ? !!(v.l1 && v.l2) : !!v.v; };
@@ -285,9 +285,9 @@ export default function App() {
           </div>
         </div>
         <div style={{ marginTop: 18, background: T.field, border: `1px solid ${T.line}`, borderRadius: 15, padding: 4, display: "flex", gap: 4 }}>
-          {[["study", "Study"], ["revision", `Revision${queueN ? ` · ${queueN}` : ""}`], ["dash", "Dashboard"]].map(([k, l]) => (
+          {[["study", "Study"], ["revision", `Revision${queueN ? ` · ${queueN}` : ""}`], ["mocks", "Mocks"], ["dash", "Dashboard"]].map(([k, l]) => (
             <button key={k} onClick={() => setView(k)}
-              style={{ flex: 1, padding: "10px 0", borderRadius: 11, border: "none", fontSize: 13, fontWeight: 600, background: view === k ? T.card2 : "transparent", color: view === k ? T.ink : T.mut, display: "flex", alignItems: "center", justifyContent: "center", gap: 7 }}>
+              style={{ flex: 1, padding: "10px 0", borderRadius: 11, border: "none", fontSize: 12.5, fontWeight: 600, background: view === k ? T.card2 : "transparent", color: view === k ? T.ink : T.mut, display: "flex", alignItems: "center", justifyContent: "center", gap: 7 }}>
               {view === k && <span style={{ width: 5, height: 5, borderRadius: 99, background: T.accent, boxShadow: `0 0 6px ${T.accent}`, flexShrink: 0 }} />}{l}
             </button>
           ))}
@@ -303,6 +303,7 @@ export default function App() {
       <main style={{ maxWidth: 780, margin: "0 auto", padding: "16px 20px 90px", display: "flex", flexDirection: "column", gap: 14 }}>
         {view === "study" && <Study state={state} persist={persist} struggles={struggles} setStruggles={setStruggles} now={now} T={T} />}
         {view === "revision" && <Revision struggles={struggles} setStruggles={setStruggles} state={state} persist={persist} now={now} T={T} />}
+        {view === "mocks" && <Mocks state={state} persist={persist} now={now} T={T} />}
         {view === "dash" && <Dashboard state={state} persist={persist} struggles={struggles} now={now} T={T} />}
       </main>
     </div>
@@ -905,5 +906,202 @@ function ClusterCelebration({ data, onDone, T }) {
         <div style={{ fontSize: 10.5, color: T.dim, marginTop: 16 }}>tap anywhere to continue</div>
       </div>
     </button>
+  );
+}
+
+/* ================================================================
+   MOCKS — log, score, and (most importantly) analyse
+   ================================================================ */
+const MOCK_SECTIONS = [
+  { id: "varc", name: "VARC", qs: 24 },
+  { id: "dilr", name: "DILR", qs: 22 },
+  { id: "qa", name: "QA", qs: 22 },
+];
+/* CAT marking: +3 correct, -1 wrong on MCQ, no negative on TITA. We can't
+   know the MCQ/TITA split per attempt, so this is the standard all-MCQ
+   estimate — close, but treat it as indicative rather than exact. */
+const secScore = (s) => (s.correct || 0) * 3 - Math.max(0, (s.attempted || 0) - (s.correct || 0));
+const mockScore = (m) => MOCK_SECTIONS.reduce((a, sec) => a + secScore(m.sections?.[sec.id] || {}), 0);
+const secAcc = (s) => (s.attempted ? Math.round(((s.correct || 0) / s.attempted) * 100) : 0);
+
+function Mocks({ state, persist, now, T }) {
+  const [adding, setAdding] = useState(false);
+  const mocks = [...(state.mocks || [])].sort((a, b) => (a.date < b.date ? 1 : -1));
+
+  const addMock = (m) => {
+    persist(stampField({ ...state, mocks: [...(state.mocks || []), m], log: [...state.log, { date: dayKey(now), type: "mock", seq: Date.now() }] }, "mocks"));
+    setAdding(false);
+  };
+  const removeMock = (id) => persist(stampField({ ...state, mocks: (state.mocks || []).filter((m) => m.id !== id) }, "mocks"));
+
+  const best = mocks.length ? Math.max(...mocks.map(mockScore)) : 0;
+  const latest = mocks.length ? mockScore(mocks[0]) : 0;
+
+  return (
+    <>
+      <div className="card" style={{ padding: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+          <div>
+            <div className="serif" style={{ fontSize: 18, fontWeight: 600 }}>Mock tests</div>
+            <div style={{ fontSize: 12, color: T.mut, marginTop: 3, lineHeight: 1.5 }}>
+              {mocks.length === 0
+                ? "From October onward these matter more than syllabus coverage. Attempt strategy and timing are learned here, not in class."
+                : `${mocks.length} logged · latest ${latest} · best ${best}`}
+            </div>
+          </div>
+          <button onClick={() => setAdding(!adding)} style={{ background: adding ? T.card2 : `linear-gradient(90deg, ${T.accent}, ${T.accent2})`, border: adding ? `1px solid ${T.line}` : "none", borderRadius: 11, padding: "9px 16px", fontSize: 11.5, fontWeight: 700, color: adding ? T.mut : T.onAccent, flexShrink: 0 }}>
+            {adding ? "Cancel" : "Log a mock"}
+          </button>
+        </div>
+      </div>
+
+      {adding && <MockForm onSave={addMock} now={now} T={T} />}
+
+      {mocks.length > 1 && <MockTrend mocks={[...mocks].reverse()} T={T} />}
+
+      {mocks.map((m) => <MockCard key={m.id} m={m} onRemove={() => removeMock(m.id)} T={T} />)}
+
+      {mocks.length === 0 && !adding && (
+        <div className="card" style={{ padding: 24, textAlign: "center", fontSize: 13, color: T.mut, lineHeight: 1.6 }}>
+          No mocks logged yet.<br />
+          <span style={{ color: T.dim, fontSize: 12 }}>Log the first one whenever she takes it — even a sectional counts.</span>
+        </div>
+      )}
+    </>
+  );
+}
+
+function MockForm({ onSave, now, T }) {
+  const [name, setName] = useState("");
+  const [date, setDate] = useState(dayKey(now));
+  const [rows, setRows] = useState(Object.fromEntries(MOCK_SECTIONS.map((s) => [s.id, { attempted: "", correct: "" }])));
+  const [notes, setNotes] = useState("");
+  const [percentile, setPercentile] = useState("");
+
+  const setCell = (sec, field, v) => setRows({ ...rows, [sec]: { ...rows[sec], [field]: v.replace(/[^0-9]/g, "") } });
+
+  const valid = MOCK_SECTIONS.every((s) => {
+    const r = rows[s.id];
+    const a = Number(r.attempted || 0), c = Number(r.correct || 0);
+    return c <= a && a <= s.qs;
+  });
+
+  const save = () => {
+    if (!valid) return;
+    onSave({
+      id: uid(), name: name.trim() || "Mock", date, notes: notes.trim(), percentile: percentile.trim(),
+      sections: Object.fromEntries(MOCK_SECTIONS.map((s) => [s.id, { attempted: Number(rows[s.id].attempted || 0), correct: Number(rows[s.id].correct || 0) }])),
+    });
+  };
+
+  const input = { background: T.field, border: `1px solid ${T.line}`, borderRadius: 10, padding: "9px 10px", fontSize: 13, color: T.ink, outline: "none", width: "100%" };
+  const cell = { ...input, textAlign: "center", padding: "8px 4px" };
+
+  return (
+    <div className="card" style={{ padding: 20 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. SIMCAT 3" style={{ ...input, flex: 2 }} />
+        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ ...input, flex: 1.4, colorScheme: "dark" }} />
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 4px 8px" }}>
+        <div style={{ flex: 1, fontSize: 9, letterSpacing: "0.1em", color: T.dim, fontWeight: 700 }}>SECTION</div>
+        {["ATTEMPTED", "CORRECT", "SCORE"].map((h) => <div key={h} style={{ width: 74, textAlign: "center", fontSize: 9, letterSpacing: "0.08em", color: T.dim, fontWeight: 700 }}>{h}</div>)}
+      </div>
+
+      {MOCK_SECTIONS.map((s) => {
+        const r = rows[s.id];
+        const a = Number(r.attempted || 0), c = Number(r.correct || 0);
+        const bad = c > a || a > s.qs;
+        return (
+          <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 600 }}>{s.name}</div>
+              <div style={{ fontSize: 10.5, color: T.dim }}>{s.qs} questions</div>
+            </div>
+            <input value={r.attempted} onChange={(e) => setCell(s.id, "attempted", e.target.value)} placeholder="0" inputMode="numeric" style={{ ...cell, width: 74, borderColor: a > s.qs ? T.accent2 : T.line }} />
+            <input value={r.correct} onChange={(e) => setCell(s.id, "correct", e.target.value)} placeholder="0" inputMode="numeric" style={{ ...cell, width: 74, borderColor: bad ? T.accent2 : T.line }} />
+            <div style={{ width: 74, textAlign: "center", fontSize: 14, fontWeight: 700, color: bad ? T.accent2 : T.accent }}>
+              {bad ? "—" : secScore({ attempted: a, correct: c })}
+            </div>
+          </div>
+        );
+      })}
+
+      <div style={{ display: "flex", gap: 8, margin: "12px 0" }}>
+        <input value={percentile} onChange={(e) => setPercentile(e.target.value)} placeholder="Percentile (optional)" style={{ ...input, flex: 1 }} />
+      </div>
+      <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} placeholder="What went wrong? What to do differently next time? (this is the part that actually improves scores)" style={{ ...input, resize: "none", lineHeight: 1.5 }} />
+
+      {!valid && <div style={{ fontSize: 11.5, color: T.accent2, fontWeight: 600, marginTop: 10 }}>Check the numbers — correct can't exceed attempted, and attempted can't exceed the section total.</div>}
+
+      <button onClick={save} disabled={!valid} style={{ width: "100%", marginTop: 12, background: `linear-gradient(90deg, ${T.accent}, ${T.accent2})`, border: "none", borderRadius: 12, padding: 12, fontSize: 13, fontWeight: 700, color: T.onAccent, opacity: valid ? 1 : 0.4 }}>Save mock</button>
+    </div>
+  );
+}
+
+function MockTrend({ mocks, T }) {
+  const scores = mocks.map(mockScore);
+  const max = Math.max(...scores, 10);
+  return (
+    <div className="card" style={{ padding: 20 }}>
+      <div className="serif" style={{ fontSize: 17, fontWeight: 600, marginBottom: 3 }}>Total score trend</div>
+      <div style={{ fontSize: 11.5, color: T.mut, marginBottom: 14 }}>Oldest to newest. Direction matters more than any single score.</div>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 96 }}>
+        {mocks.map((m, i) => {
+          const sc = scores[i];
+          return (
+            <div key={m.id} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 5, minWidth: 0 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: T.mut }}>{sc}</div>
+              <div title={m.name} style={{ width: "100%", borderRadius: "5px 5px 2px 2px", height: Math.max(6, (sc / max) * 62), background: `linear-gradient(180deg, ${T.accent}, ${T.accent2})`, boxShadow: `0 0 8px ${T.accent}44` }} />
+              <div style={{ fontSize: 9, color: T.dim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>{m.name}</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function MockCard({ m, onRemove, T }) {
+  const [open, setOpen] = useState(false);
+  const total = mockScore(m);
+  return (
+    <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+      <button onClick={() => setOpen(!open)} style={{ width: "100%", background: "none", border: "none", color: T.ink, textAlign: "left", padding: "16px 18px", display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="serif" style={{ fontSize: 16, fontWeight: 600 }}>{m.name}</div>
+          <div style={{ fontSize: 11, color: T.dim, marginTop: 2 }}>{m.date}{m.percentile ? ` · ${m.percentile} %ile` : ""}</div>
+        </div>
+        <div style={{ textAlign: "right", flexShrink: 0 }}>
+          <div className="serif" style={{ fontSize: 20, fontWeight: 700, color: T.accent }}>{total}</div>
+          <div style={{ fontSize: 8.5, letterSpacing: "0.12em", color: T.dim, fontWeight: 700 }}>SCORE</div>
+        </div>
+        {Icon.chevron(open, T.dim)}
+      </button>
+      {open && (
+        <div style={{ padding: "0 18px 18px", borderTop: `1px solid ${T.line}` }}>
+          <div style={{ display: "flex", gap: 8, margin: "14px 0" }}>
+            {MOCK_SECTIONS.map((s) => {
+              const r = m.sections?.[s.id] || {};
+              return (
+                <div key={s.id} style={{ flex: 1, background: T.card2, border: `1px solid ${T.line}`, borderRadius: 12, padding: 11, textAlign: "center" }}>
+                  <div style={{ fontSize: 10, letterSpacing: "0.1em", color: T.dim, fontWeight: 700 }}>{s.name}</div>
+                  <div className="serif" style={{ fontSize: 19, fontWeight: 700, color: T.gold, marginTop: 4 }}>{secScore(r)}</div>
+                  <div style={{ fontSize: 10.5, color: T.mut, marginTop: 3 }}>{r.correct || 0}/{r.attempted || 0} · {secAcc(r)}%</div>
+                </div>
+              );
+            })}
+          </div>
+          {m.notes && (
+            <div style={{ background: T.field, border: `1px solid ${T.line}`, borderRadius: 12, padding: 13 }}>
+              <div style={{ fontSize: 9.5, letterSpacing: "0.12em", color: T.dim, fontWeight: 700, marginBottom: 6 }}>TAKEAWAYS</div>
+              <div style={{ fontSize: 13, color: T.ink, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{m.notes}</div>
+            </div>
+          )}
+          <button onClick={onRemove} style={{ marginTop: 12, background: "none", border: "none", fontSize: 11, color: T.dim, fontWeight: 600, padding: 0 }}>Delete this mock</button>
+        </div>
+      )}
+    </div>
   );
 }
