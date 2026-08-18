@@ -46,6 +46,28 @@ export const SECTIONS = [
     ["c","Probability Basics"],["c","Coins"],["c","Dice"],["c","Bayes' Theorem"],["s","Probability"],
     ["c","Binomial Theorem"],["s","Set Theory"],
   ]),
+  {
+    id: "varc", name: "VARC", groups: [
+      { name: "Foundations", count: 9 },
+      { name: "Reading & Sentences", count: 8 },
+      { name: "Options & Traps", count: 6 },
+      { name: "Question Types", count: 8 },
+      { name: "Paragraph Skills", count: 11 },
+    ],
+    items: [
+      "CAT RC Insights 1", "CAT RC Insights 2", "Verbal Ability Insights", "Non-CAT Verbal",
+      "Analysis for Learning 1", "Analysis for Learning 2", "Orientation to Reading Lessons",
+      "Vocab", "Grammar for CAT",
+      "Handling Complex Sentences", "Decoding WHY of Sentence", "Mind the Red — Main Point",
+      "Author's Attitude", "Find Their Attitude", "Reading Passage", "Navigating Tough Passage", "Tough One",
+      "What Is Wrong Option", "Option Trap", "Picking Traps", "Global Question", "Local Closed Q", "Local Open Q",
+      "Argument", "Inference", "Assumption", "New Evidences (Impact)", "Strengthening & Weakening",
+      "Author Agreement", "Specific Function Questions", "Twisted Q",
+      "3 Pillars of Paragraph", "Unity", "Cohesion — Echo", "Cohesion — Pronoun", "Cohesion — Signal",
+      "Cohesion — Sentence Block", "Coherence Zooming", "Paragraph Summary", "Paragraph Jumble",
+      "Odd Sentence in Para", "Sentence Placement",
+    ].map((name, i) => ({ id: `varc-c${i}`, kind: "c", name })),
+  },
 ];
 
 export const ALL_ITEMS = SECTIONS.flatMap((s) =>

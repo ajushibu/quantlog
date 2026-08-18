@@ -1,9 +1,9 @@
 export const metadata = {
-  title: "QuantLog",
-  description: "A calm, private CAT quant study tracker",
+  title: "CAT Log",
+  description: "A calm, private CAT prep tracker",
   manifest: "/manifest.json",
-  applicationName: "QuantLog",
-  appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "QuantLog" },
+  applicationName: "CAT Log",
+  appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "CAT Log" },
   icons: {
     icon: [
       { url: "/favicon.png", sizes: "32x32", type: "image/png" },

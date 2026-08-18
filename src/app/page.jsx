@@ -46,6 +46,16 @@ const stampField = (state, field) => ({
    Percentages LOD1/LOD2 set, exactly as she described it. */
 function buildClusters(section) {
   const clusters = [];
+  // sections without practice sets (e.g. VARC) declare thematic groups instead
+  if (section.groups) {
+    let idx = 0;
+    section.groups.forEach((g, gi) => {
+      const slice = section.items.slice(idx, idx + g.count);
+      idx += g.count;
+      if (slice.length) clusters.push({ id: `${section.id}-cl${gi}`, name: g.name, classIds: slice.map((c) => c.id), setId: null });
+    });
+    return clusters;
+  }
   let run = [];
   section.items.forEach((it) => {
     if (it.kind === "s") { clusters.push({ id: `${section.id}-cl${clusters.length}`, name: it.name, classIds: run.map((c) => c.id), setId: it.id }); run = []; }
@@ -56,13 +66,22 @@ function buildClusters(section) {
 const CLUSTERS_BY_SECTION = Object.fromEntries(SECTIONS.map((s) => [s.id, buildClusters(s)]));
 const ALL_CLUSTERS = SECTIONS.flatMap((s) => CLUSTERS_BY_SECTION[s.id]);
 
-function clusterAllIds(cl) { return [...cl.classIds, cl.setId]; }
+function clusterAllIds(cl) { return cl.setId ? [...cl.classIds, cl.setId] : [...cl.classIds]; }
 function clusterDone(state, cl) {
-  return cl.classIds.every((id) => !!(state.items[id] || {}).v) && itemDone(state, ITEM_BY_ID[cl.setId]);
+  const classesDone = cl.classIds.every((id) => !!(state.items[id] || {}).v);
+  return classesDone && (!cl.setId || itemDone(state, ITEM_BY_ID[cl.setId]));
 }
 function clustersContaining(itemId) {
   return ALL_CLUSTERS.filter((cl) => clusterAllIds(cl).includes(itemId));
 }
+
+
+/* Study is split by exam area so a single scroll isn't 142 rows long. */
+const AREAS = [
+  { id: "quant", label: "Quant", sectionIds: ["arith", "algebra", "geo", "num", "mod"] },
+  { id: "varc", label: "VARC", sectionIds: ["varc"] },
+];
+const areaSections = (areaId) => SECTIONS.filter((s) => (AREAS.find((a) => a.id === areaId)?.sectionIds || []).includes(s.id));
 
 function defaultState() {
   return { settings: { revisionDays: [0] }, items: {}, flags: {}, celebrated: {}, mocks: [], log: [], digest: "", digestDate: "", meta: {} };
@@ -104,33 +123,93 @@ function compressImage(file, maxDim = 1000, quality = 0.72) {
   });
 }
 
+/* Real PDF, not HTML-renamed-to-.doc (which iOS shows as raw markup).
+   Text and photos are laid out in order, paginated, so a question that has
+   both reads as one block. */
 async function exportRevisionDoc(queue, flagged) {
-  const parts = [];
-  for (let i = 0; i < queue.length; i++) {
-    const s = queue[i];
-    let imgTag = "";
-    if (s.hasPhoto) {
-      const url = await fetchPhotoUrl(s.id);
-      if (url) {
-        const blob = await (await fetch(url)).blob();
-        const b64 = await new Promise((res) => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(blob); });
-        imgTag = `<p><img src="${b64}" style="max-width:520px" /></p>`;
-      }
-    }
-    parts.push(`<div style="page-break-inside:avoid; margin-bottom:36px;">
-      <p style="font-size:11px; color:#666; letter-spacing:1px; margin:0 0 6px;"><b>Q${i + 1}</b> · ${ITEM_BY_ID[s.topicId]?.name || "General"} · filed ${s.date}${s.keepCount ? ` · kept ${s.keepCount}×` : ""}</p>
-      ${s.text ? `<p style="font-size:14px; margin:0 0 8px;">${s.text.replace(/</g, "&lt;")}</p>` : ""}
-      ${imgTag}<p style="color:#bbb; font-size:11px;">Working:</p><div style="height:140px; border:1px solid #ddd;"></div></div>`);
+  const { jsPDF } = await import("jspdf");
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const PW = doc.internal.pageSize.getWidth();
+  const PH = doc.internal.pageSize.getHeight();
+  const M = 48;                       // margin
+  const CW = PW - M * 2;              // content width
+  let y = M;
+
+  const need = (h) => { if (y + h > PH - M) { doc.addPage(); y = M; } };
+
+  // --- header ---
+  doc.setFont("times", "bold"); doc.setFontSize(20); doc.setTextColor(20, 20, 20);
+  doc.text("Revision Sheet", M, y + 6); y += 26;
+  doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(120, 120, 120);
+  doc.text(`${new Date().toDateString()}  ·  ${queue.length} question${queue.length === 1 ? "" : "s"}`, M, y); y += 14;
+  doc.setDrawColor(210, 210, 210); doc.line(M, y, PW - M, y); y += 22;
+
+  if (flagged.length) {
+    doc.setFont("helvetica", "bold"); doc.setFontSize(9.5); doc.setTextColor(70, 70, 70);
+    doc.text("Also revisit notes for:", M, y); y += 13;
+    doc.setFont("helvetica", "normal"); doc.setTextColor(110, 110, 110);
+    const names = flagged.map((id) => ITEM_BY_ID[id]?.name).filter(Boolean).join(", ");
+    const lines = doc.splitTextToSize(names, CW);
+    doc.text(lines, M, y); y += lines.length * 12 + 16;
+    doc.setDrawColor(230, 230, 230); doc.line(M, y - 8, PW - M, y - 8);
   }
-  const flaggedHtml = flagged.length ? `<p style="font-size:12px;color:#444;"><b>Also revisit notes for:</b> ${flagged.map((id) => ITEM_BY_ID[id]?.name).filter(Boolean).join(", ")}</p><hr/>` : "";
-  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Revision</title></head><body style="font-family:Georgia,serif;color:#111;padding:24px;">
-    <h1 style="font-size:22px;margin-bottom:2px;">Weekly Revision Sheet</h1>
-    <p style="font-size:12px;color:#666;margin-top:0;">${new Date().toDateString()} · ${queue.length} question${queue.length === 1 ? "" : "s"}</p>
-    <hr/>${flaggedHtml}${parts.join("")}</body></html>`;
-  const blob = new Blob(["\ufeff", html], { type: "application/msword" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob); a.download = `revision-${dayKey(new Date())}.doc`; a.click();
-  URL.revokeObjectURL(a.href);
+
+  for (let i = 0; i < queue.length; i++) {
+    const q = queue[i];
+    need(90);
+
+    // question label
+    doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.setTextColor(150, 90, 20);
+    const label = `Q${i + 1}  ·  ${(ITEM_BY_ID[q.topicId]?.name || "General")}  ·  filed ${q.date}${q.keepCount ? `  ·  kept ${q.keepCount}x` : ""}`;
+    doc.text(label, M, y); y += 15;
+
+    // question text
+    if (q.text) {
+      doc.setFont("times", "normal"); doc.setFontSize(12); doc.setTextColor(25, 25, 25);
+      const lines = doc.splitTextToSize(q.text, CW);
+      for (const ln of lines) { need(16); doc.text(ln, M, y); y += 15; }
+      y += 4;
+    }
+
+    // photo, scaled to fit and paginated
+    if (q.hasPhoto) {
+      try {
+        const url = await fetchPhotoUrl(q.id);
+        if (url) {
+          const blob = await (await fetch(url)).blob();
+          const dataUrl = await new Promise((res) => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(blob); });
+          const dims = await new Promise((res) => { const im = new Image(); im.onload = () => res({ w: im.width, h: im.height }); im.onerror = () => res(null); im.src = dataUrl; });
+          if (dims) {
+            const maxW = CW, maxH = PH - M * 2 - 40;
+            let w = Math.min(maxW, dims.w * 0.75);
+            let h = (dims.h / dims.w) * w;
+            if (h > maxH) { h = maxH; w = (dims.w / dims.h) * h; }
+            need(h + 10);
+            doc.addImage(dataUrl, "JPEG", M, y, w, h);
+            y += h + 10;
+          }
+          URL.revokeObjectURL(url);
+        }
+      } catch (e) { console.error("photo export failed", e); }
+    }
+
+    // working space
+    need(120);
+    doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(170, 170, 170);
+    doc.text("Working", M, y + 10);
+    doc.setDrawColor(224, 224, 224);
+    doc.roundedRect(M, y + 16, CW, 104, 4, 4);
+    y += 138;
+
+    if (i < queue.length - 1) { doc.setDrawColor(238, 238, 238); need(10); doc.line(M, y - 12, PW - M, y - 12); }
+  }
+
+  if (!queue.length && !flagged.length) {
+    doc.setFont("helvetica", "normal"); doc.setFontSize(11); doc.setTextColor(140, 140, 140);
+    doc.text("Nothing in the revision queue.", M, y);
+  }
+
+  doc.save(`revision-${dayKey(new Date())}.pdf`);
 }
 
 /* ================================================================ */
@@ -266,7 +345,7 @@ export default function App() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div>
             <h1 className="serif" style={{ fontSize: 42, lineHeight: 0.98, margin: 0, fontWeight: 600 }}>
-              Quant<br /><em className="glowText" style={{ color: T.accent, fontWeight: 500 }}>Log</em>
+              CAT<br /><em className="glowText" style={{ color: T.accent, fontWeight: 500 }}>Log</em>
             </h1>
             <div style={{ letterSpacing: "0.22em", fontSize: 10.5, color: T.dim, marginTop: 10, fontWeight: 500 }}>ONE CLASS AT A TIME</div>
           </div>
@@ -345,7 +424,7 @@ function Splash({ T, text }) {
       <style>{`@keyframes pulse { 0%,100%{opacity:.45} 50%{opacity:1} }`}</style>
       <div style={{ textAlign: "center" }}>
         <div style={{ fontSize: 30, fontWeight: 600, color: T.ink, animation: "pulse 1.6s ease-in-out infinite" }}>
-          Quant<em style={{ color: T.accent }}>Log</em>
+          CAT<em style={{ color: T.accent }}>Log</em>
         </div>
         <div style={{ fontSize: 11, color: T.dim, marginTop: 8, letterSpacing: "0.18em", fontFamily: "system-ui" }}>{text.toUpperCase()}</div>
       </div>
@@ -358,7 +437,7 @@ function Login({ code, setCodeInput, onSubmit, err, T }) {
     <div style={{ minHeight: "100vh", background: T.bgGrad, display: "grid", placeItems: "center", padding: 20 }}>
       <GlobalStyle T={T} />
       <div className="card" style={{ padding: 28, width: 320, color: T.ink }}>
-        <h1 className="serif" style={{ fontSize: 28, margin: "0 0 4px" }}>Quant<em style={{ color: T.accent }}>Log</em></h1>
+        <h1 className="serif" style={{ fontSize: 28, margin: "0 0 4px" }}>CAT<em style={{ color: T.accent }}>Log</em></h1>
         <p style={{ fontSize: 12.5, color: T.mut, margin: "0 0 16px" }}>Enter the access code you both agreed on.</p>
         <input autoFocus type="password" value={code} onChange={(e) => setCodeInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && onSubmit()}
           placeholder="Access code" style={{ width: "100%", background: T.field, border: `1px solid ${T.line}`, borderRadius: 12, padding: 12, color: T.ink, fontSize: 14, outline: "none" }} />
@@ -416,7 +495,8 @@ function Study({ state, persist, struggles, setStruggles, now, T }) {
   const today = dayKey(now);
   const isRevisionDay = state.settings.revisionDays.includes(now.getDay());
   const streak = streakDays(state);
-  const [celebration, setCelebration] = useState(null); // { name, days } | null
+  const [celebration, setCelebration] = useState(null);
+  const [area, setArea] = useState("quant");
 
   const logAct = (next, type) => ({ ...next, log: [...state.log, { date: today, type, seq: Date.now() }] });
   const toggle = (id, key) => {
@@ -452,14 +532,33 @@ function Study({ state, persist, struggles, setStruggles, now, T }) {
         </div>
       </div>
       {celebration && <ClusterCelebration data={celebration} onDone={() => setCelebration(null)} T={T} />}
-      {SECTIONS.map((s) => <SectionCard key={s.id} s={s} state={state} onToggle={toggle} onFlag={toggleFlag} T={T} />)}
+      <div style={{ display: "flex", gap: 6, background: T.field, border: `1px solid ${T.line}`, borderRadius: 14, padding: 4 }}>
+        {AREAS.map((a) => {
+          const secs = areaSections(a.id);
+          const items = secs.flatMap((sec) => sec.items);
+          const doneN = items.filter((it) => itemDone(state, it)).length;
+          const on = area === a.id;
+          return (
+            <button key={a.id} onClick={() => setArea(a.id)} style={{
+              flex: 1, padding: "11px 0", borderRadius: 11, border: "none",
+              background: on ? T.card2 : "transparent", color: on ? T.ink : T.mut,
+              fontSize: 13, fontWeight: 600, display: "flex", flexDirection: "column", gap: 2,
+            }}>
+              <span>{a.label}</span>
+              <span style={{ fontSize: 10.5, color: on ? T.accent : T.dim, fontWeight: 600 }}>{doneN} / {items.length}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {areaSections(area).map((s) => <SectionCard key={s.id} s={s} state={state} onToggle={toggle} onFlag={toggleFlag} T={T} />)}
       <StruggleBox state={state} persist={persist} struggles={struggles} setStruggles={setStruggles} today={today} T={T} />
     </>
   );
 }
 
 function SectionCard({ s, state, onToggle, onFlag, T }) {
-  const [open, setOpen] = useState(s.id === "arith");
+  const [open, setOpen] = useState(s.id === "arith" || s.id === "varc");
   const st = sectionStats(state, s);
   return (
     <div className="card" style={{ overflow: "hidden", border: `1px solid ${st.allDone ? T.gold + "66" : T.line}`, background: st.allDone ? `linear-gradient(150deg, ${T.card2}, ${T.card})` : T.card, boxShadow: st.allDone ? `0 0 28px ${T.accent}22` : "none" }}>
@@ -467,7 +566,7 @@ function SectionCard({ s, state, onToggle, onFlag, T }) {
         <MiniRing pct={st.pct} done={st.allDone} T={T} />
         <div style={{ flex: 1 }}>
           <div className="serif" style={{ fontSize: 17.5, fontWeight: 600, color: st.allDone ? T.gold : T.ink }}>{s.name}</div>
-          <div style={{ fontSize: 11.5, color: T.mut, marginTop: 2 }}>{st.clsDone}/{st.clsTotal} classes · {st.setsDone}/{st.setsTotal} practice sets</div>
+          <div style={{ fontSize: 11.5, color: T.mut, marginTop: 2 }}>{st.clsDone}/{st.clsTotal} classes{st.setsTotal ? ` · ${st.setsDone}/${st.setsTotal} practice sets` : ""}</div>
         </div>
         {Icon.chevron(open, T.dim)}
       </button>
@@ -533,8 +632,18 @@ function SetRow({ it, state, onToggle, onFlag, T }) {
 }
 
 /* ---------------- Struggle box ---------------- */
+const TOPIC_MEMORY_KEY = "catlog_last_topic";
+
 function StruggleBox({ state, persist, struggles, setStruggles, today, T }) {
   const [text, setText] = useState("");
+  // topic sticks between filings — she works through one topic at a time,
+  // so re-picking it for every question is pure friction
+  const [topicId, setTopicId] = useState(() => {
+    if (typeof window === "undefined") return "";
+    const saved = localStorage.getItem(TOPIC_MEMORY_KEY);
+    return saved && ITEM_BY_ID[saved] ? saved : "";
+  });
+  const chooseTopic = (id) => { setTopicId(id); if (id) localStorage.setItem(TOPIC_MEMORY_KEY, id); };
   const [ansText, setAnsText] = useState("");
   const [photo, setPhoto] = useState(null);
   const [ansPhoto, setAnsPhoto] = useState(null);
@@ -551,9 +660,8 @@ function StruggleBox({ state, persist, struggles, setStruggles, today, T }) {
 
   const submit = async () => {
     if (!text.trim() && !photo) return;
+    if (!topicId) { setMsg("Pick a topic first"); setTimeout(() => setMsg(""), 2500); return; }
     setBusy(true); setMsg("");
-    let topicId = "other";
-    try { const r = await api.classify({ text: text.trim(), imageDataUrl: photo }); topicId = r.itemId || "other"; } catch (e) { console.error(e); }
     const id = uid();
     try {
       if (photo) await api.uploadPhoto(id, photo);
@@ -562,7 +670,7 @@ function StruggleBox({ state, persist, struggles, setStruggles, today, T }) {
       await api.createStruggle(entry);
       setStruggles([...struggles, { ...entry, retired: false, lastTried: null, keepCount: 0 }]);
       await persist({ ...state, log: [...state.log, { date: today, type: "struggle" }] });
-      setMsg(topicId !== "other" ? `Filed under ${ITEM_BY_ID[topicId]?.name}` : "Saved");
+      setMsg(`Filed under ${ITEM_BY_ID[topicId]?.name || "Other"}`);
     } catch (e) { console.error(e); setMsg("Couldn't save — try again"); }
     setText(""); setAnsText(""); setPhoto(null); setAnsPhoto(null); setShowAns(false); setBusy(false);
     setTimeout(() => setMsg(""), 4000);
@@ -573,7 +681,29 @@ function StruggleBox({ state, persist, struggles, setStruggles, today, T }) {
   return (
     <div className="card" style={{ padding: 20 }}>
       <div className="serif" style={{ fontSize: 17, fontWeight: 600 }}>Stuck on a question?</div>
-      <div style={{ fontSize: 12, color: T.mut, margin: "3px 0 12px" }}>Type it or photograph it. It files itself and joins the revision queue.</div>
+      <div style={{ fontSize: 12, color: T.mut, margin: "3px 0 12px" }}>Type it or photograph it, pick the topic once, then file as many as you like.</div>
+
+      <div style={{ marginBottom: 10 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
+          <span style={{ fontSize: 9.5, letterSpacing: "0.12em", color: T.dim, fontWeight: 700 }}>TOPIC</span>
+          {topicId && <span style={{ fontSize: 10, color: T.dim }}>stays selected for the next one</span>}
+        </div>
+        <select value={topicId} onChange={(e) => chooseTopic(e.target.value)} style={{
+          width: "100%", background: T.field, border: `1px solid ${topicId ? T.accent + "66" : T.line}`,
+          borderRadius: 12, padding: "12px 10px", fontSize: 13.5, color: topicId ? T.ink : T.dim,
+          outline: "none", fontWeight: topicId ? 600 : 400,
+        }}>
+          <option value="">Choose a topic…</option>
+          {SECTIONS.map((sec) => (
+            <optgroup key={sec.id} label={sec.name}>
+              {sec.items.map((it) => (
+                <option key={it.id} value={it.id}>{it.kind === "s" ? `${it.name} (practice set)` : it.name}</option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+      </div>
+
       <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} placeholder="e.g. Q14, page 87 — why LCM here?" style={inputStyle} />
       {photo && (
         <div style={{ position: "relative", display: "inline-block", marginTop: 10 }}>
@@ -600,7 +730,7 @@ function StruggleBox({ state, persist, struggles, setStruggles, today, T }) {
           {!showAns && <button onClick={() => setShowAns(true)} style={{ background: "none", border: "none", fontSize: 12, fontWeight: 600, color: T.dim }}>+ answer</button>}
           <span style={{ fontSize: 12, fontWeight: 600, color: T.accent }}>{msg}</span>
         </div>
-        <button onClick={submit} disabled={busy || (!text.trim() && !photo)} style={{ background: `linear-gradient(90deg, ${T.accent}, ${T.accent2})`, border: "none", borderRadius: 12, padding: "10px 20px", fontSize: 12.5, fontWeight: 700, color: T.onAccent, opacity: busy || (!text.trim() && !photo) ? 0.4 : 1, boxShadow: `0 0 18px ${T.accent}44` }}>{busy ? "Filing" : "File it"}</button>
+        <button onClick={submit} disabled={busy || !topicId || (!text.trim() && !photo)} style={{ background: `linear-gradient(90deg, ${T.accent}, ${T.accent2})`, border: "none", borderRadius: 12, padding: "10px 20px", fontSize: 12.5, fontWeight: 700, color: T.onAccent, opacity: busy || !topicId || (!text.trim() && !photo) ? 0.4 : 1, boxShadow: `0 0 18px ${T.accent}44` }}>{busy ? "Filing" : "File it"}</button>
       </div>
       <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => pick(e, setPhoto)} />
       <input ref={ansRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => pick(e, setAnsPhoto)} />
@@ -630,7 +760,13 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
   const keep = (id) => { const s = struggles.find((x) => x.id === id); update(id, { lastTried: today, keepCount: (s?.keepCount || 0) + 1 }); };
   const unflag = (id) => persist(stampItem({ ...state, flags: { ...state.flags, [id]: false }, log: [...state.log, { date: today, type: "revision", seq: Date.now() }] }, "flags", id));
 
-  const doExport = async () => { setExporting(true); try { await exportRevisionDoc(filtered, flagged); } catch (e) { console.error(e); } setExporting(false); };
+  const [exportErr, setExportErr] = useState("");
+  const doExport = async () => {
+    setExporting(true); setExportErr("");
+    try { await exportRevisionDoc(filtered, flagged); }
+    catch (e) { console.error(e); setExportErr("Couldn't build the PDF — try again."); }
+    setExporting(false);
+  };
 
   return (
     <>
@@ -640,8 +776,9 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
             <div className="serif" style={{ fontSize: 18, fontWeight: 600 }}>Revision queue</div>
             <div style={{ fontSize: 12, color: T.mut, marginTop: 3 }}>{queue.length} question{queue.length === 1 ? "" : "s"} waiting · {flagged.length} bookmarked</div>
           </div>
-          <button onClick={doExport} disabled={exporting || (filtered.length === 0 && flagged.length === 0)} style={{ display: "flex", alignItems: "center", gap: 7, background: `linear-gradient(90deg, ${T.accent}, ${T.accent2})`, border: "none", borderRadius: 11, padding: "9px 15px", fontSize: 11.5, fontWeight: 700, color: T.onAccent, opacity: exporting || (filtered.length === 0 && flagged.length === 0) ? 0.4 : 1, boxShadow: `0 0 16px ${T.accent}44`, flexShrink: 0 }}>{Icon.download(T.onAccent)} {exporting ? "Preparing" : "Export .doc"}</button>
+          <button onClick={doExport} disabled={exporting || (filtered.length === 0 && flagged.length === 0)} style={{ display: "flex", alignItems: "center", gap: 7, background: `linear-gradient(90deg, ${T.accent}, ${T.accent2})`, border: "none", borderRadius: 11, padding: "9px 15px", fontSize: 11.5, fontWeight: 700, color: T.onAccent, opacity: exporting || (filtered.length === 0 && flagged.length === 0) ? 0.4 : 1, boxShadow: `0 0 16px ${T.accent}44`, flexShrink: 0 }}>{Icon.download(T.onAccent)} {exporting ? "Building PDF" : "Export PDF"}</button>
         </div>
+        {exportErr && <div style={{ fontSize: 11.5, color: T.accent2, fontWeight: 600, marginTop: 10 }}>{exportErr}</div>}
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 14 }}>
           {[["all", "All"], ...SECTIONS.map((s) => [s.id, s.name])].map(([k, l]) => {
             const on = filter === k;
@@ -689,6 +826,7 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
 
 function QueueCard({ s, now, onRetire, onKeep, T }) {
   const [img, setImg] = useState(null);
+  const [lightbox, setLightbox] = useState(null);
   const [ansImg, setAnsImg] = useState(null);
   const [reveal, setReveal] = useState(false);
   useEffect(() => { if (s.hasPhoto) fetchPhotoUrl(s.id).then(setImg); return () => img && URL.revokeObjectURL(img); }, [s.id, s.hasPhoto]);
@@ -704,7 +842,13 @@ function QueueCard({ s, now, onRetire, onKeep, T }) {
         {stale && <span style={{ fontSize: 9.5, fontWeight: 700, color: T.gold, letterSpacing: "0.08em", background: T.card2, border: `1px solid ${T.line}`, borderRadius: 99, padding: "3px 9px", flexShrink: 0 }}>UNTOUCHED {age}D</span>}
       </div>
       {s.text && <div style={{ fontSize: 13.5, lineHeight: 1.45, color: T.ink }}>{s.text}</div>}
-      {img && <img src={img} alt="question" style={{ marginTop: 8, borderRadius: 10, maxHeight: 220, maxWidth: "100%", border: `1px solid ${T.line}` }} />}
+      {img && (
+        <button onClick={() => setLightbox({ src: img, caption: `${ITEM_BY_ID[s.topicId]?.name || "Other"} · filed ${s.date}` })}
+          style={{ display: "block", padding: 0, marginTop: 8, border: "none", background: "none", position: "relative", width: "100%", textAlign: "left" }}>
+          <img src={img} alt="question" style={{ borderRadius: 10, maxHeight: 220, maxWidth: "100%", border: `1px solid ${T.line}`, display: "block" }} />
+          <span style={{ position: "absolute", bottom: 8, right: 8, background: "rgba(8,6,4,.78)", border: `1px solid ${T.line}`, borderRadius: 99, padding: "4px 10px", fontSize: 10, fontWeight: 700, color: T.accent }}>tap to enlarge</span>
+        </button>
+      )}
       <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
         <button onClick={onRetire} style={{ background: `linear-gradient(90deg, ${T.accent}, ${T.accent2})`, border: "none", borderRadius: 99, padding: "8px 15px", fontSize: 11.5, fontWeight: 700, color: T.onAccent }}>Got it — clear</button>
         <button onClick={onKeep} style={{ background: T.card2, border: `1px solid ${T.line}`, borderRadius: 99, padding: "8px 15px", fontSize: 11.5, fontWeight: 700, color: T.accent }}>Still shaky — keep</button>
@@ -713,9 +857,14 @@ function QueueCard({ s, now, onRetire, onKeep, T }) {
       {reveal && (
         <div style={{ marginTop: 9, padding: 11, background: T.field, borderRadius: 10, border: `1px solid ${T.line}` }}>
           {s.answerText && <div style={{ fontSize: 13.5, fontWeight: 700, color: T.gold }}>{s.answerText}</div>}
-          {ansImg && <img src={ansImg} alt="answer" style={{ marginTop: 5, borderRadius: 9, maxHeight: 160, maxWidth: "100%" }} />}
+          {ansImg && (
+            <button onClick={() => setLightbox({ src: ansImg, caption: "Solution" })} style={{ display: "block", padding: 0, marginTop: 5, border: "none", background: "none" }}>
+              <img src={ansImg} alt="answer" style={{ borderRadius: 9, maxHeight: 160, maxWidth: "100%", display: "block" }} />
+            </button>
+          )}
         </div>
       )}
+      {lightbox && <Lightbox src={lightbox.src} caption={lightbox.caption} onClose={() => setLightbox(null)} T={T} />}
     </div>
   );
 }
@@ -785,7 +934,7 @@ function Dashboard({ state, persist, struggles, now, T }) {
             <div key={s.id} style={{ marginBottom: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginBottom: 5 }}>
                 <span style={{ fontWeight: 600, color: st.allDone ? T.gold : T.ink }}>{s.name}</span>
-                <span style={{ color: T.dim }}>{st.clsDone}/{st.clsTotal} classes · {st.setsDone}/{st.setsTotal} sets</span>
+                <span style={{ color: T.dim }}>{st.clsDone}/{st.clsTotal} classes{st.setsTotal ? ` · ${st.setsDone}/${st.setsTotal} sets` : ""}</span>
               </div>
               <div style={{ height: 7, background: T.field, borderRadius: 99, overflow: "hidden" }}>
                 <div style={{ height: "100%", width: `${st.pct * 100}%`, background: `linear-gradient(90deg, ${T.accent}, ${T.accent2})`, borderRadius: 99, boxShadow: st.pct ? `0 0 8px ${T.accent}55` : "none", transition: "width .5s ease" }} />
@@ -920,6 +1069,41 @@ function ResetCard({ state, persist, T }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+
+/* Tap any filed photo to view it large. Fit / 2x toggle with scroll, so a
+   dense textbook question can actually be read without exporting a PDF. */
+function Lightbox({ src, caption, onClose, T }) {
+  const [zoom, setZoom] = useState(1);
+  useEffect(() => {
+    const onKey = (e) => e.key === "Escape" && onClose();
+    document.addEventListener("keydown", onKey);
+    document.body.style.overflow = "hidden";
+    return () => { document.removeEventListener("keydown", onKey); document.body.style.overflow = ""; };
+  }, []);
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, zIndex: 80, background: "rgba(6,5,4,0.94)",
+      display: "flex", flexDirection: "column", overscrollBehavior: "contain",
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", flexShrink: 0 }}>
+        <div style={{ fontSize: 11, color: T.mut, fontWeight: 600, letterSpacing: "0.06em", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{caption}</div>
+        <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+          <button onClick={(e) => { e.stopPropagation(); setZoom((z) => (z === 1 ? 2 : z === 2 ? 3 : 1)); }}
+            style={{ background: T.card2, border: `1px solid ${T.line}`, borderRadius: 99, padding: "7px 14px", fontSize: 11.5, fontWeight: 700, color: T.accent }}>
+            {zoom === 1 ? "Zoom in" : zoom === 2 ? "2x · more" : "3x · reset"}
+          </button>
+          <button onClick={onClose} style={{ background: T.card2, border: `1px solid ${T.line}`, borderRadius: 99, width: 34, height: 34, fontSize: 16, color: T.mut, lineHeight: 1 }}>×</button>
+        </div>
+      </div>
+      <div onClick={(e) => e.stopPropagation()} style={{ flex: 1, overflow: "auto", padding: 12, WebkitOverflowScrolling: "touch" }}>
+        <img src={src} alt="filed question" onClick={() => setZoom((z) => (z === 1 ? 2 : 1))}
+          style={{ display: "block", margin: "0 auto", width: `${zoom * 100}%`, maxWidth: zoom === 1 ? "900px" : "none", cursor: "zoom-in", borderRadius: 6 }} />
+      </div>
+      <div style={{ textAlign: "center", padding: "10px 0 16px", fontSize: 10.5, color: T.dim, flexShrink: 0 }}>tap outside the image to close</div>
     </div>
   );
 }
