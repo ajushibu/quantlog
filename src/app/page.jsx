@@ -83,6 +83,23 @@ const AREAS = [
 ];
 const areaSections = (areaId) => SECTIONS.filter((s) => (AREAS.find((a) => a.id === areaId)?.sectionIds || []).includes(s.id));
 
+
+/* Questions come from the book's chapters, not from individual classes —
+   there is no LOD set for "Successive %", only for Percentages as a whole.
+   So filing offers the 19 practice-set chapters plus VARC's 5 groups:
+   24 options instead of 142. */
+const TOPIC_OPTIONS = SECTIONS.flatMap((sec) => {
+  const sets = sec.items.filter((i) => i.kind === "s");
+  if (sets.length) return sets.map((it) => ({ id: it.id, name: it.name, sectionId: sec.id, sectionName: sec.name }));
+  return (CLUSTERS_BY_SECTION[sec.id] || []).map((cl) => ({ id: cl.id, name: cl.name, sectionId: sec.id, sectionName: sec.name }));
+});
+const TOPIC_OPTION_BY_ID = Object.fromEntries(TOPIC_OPTIONS.map((t) => [t.id, t]));
+
+/* Filed questions may carry either a chapter id, a cluster id, or (from
+   before this change) a plain class id — resolve all three. */
+const topicName = (id) => TOPIC_OPTION_BY_ID[id]?.name || ITEM_BY_ID[id]?.name || "Other";
+const topicSectionId = (id) => TOPIC_OPTION_BY_ID[id]?.sectionId || ITEM_BY_ID[id]?.sectionId || null;
+
 function defaultState() {
   return { settings: { revisionDays: [0] }, items: {}, flags: {}, celebrated: {}, mocks: [], log: [], digest: "", digestDate: "", meta: {} };
 }
@@ -148,7 +165,7 @@ async function exportRevisionDoc(queue, flagged) {
     doc.setFont("helvetica", "bold"); doc.setFontSize(9.5); doc.setTextColor(70, 70, 70);
     doc.text("Also revisit notes for:", M, y); y += 13;
     doc.setFont("helvetica", "normal"); doc.setTextColor(110, 110, 110);
-    const names = flagged.map((id) => ITEM_BY_ID[id]?.name).filter(Boolean).join(", ");
+    const names = flagged.map((id) => topicName(id)).filter(Boolean).join(", ");
     const lines = doc.splitTextToSize(names, CW);
     doc.text(lines, M, y); y += lines.length * 12 + 16;
     doc.setDrawColor(230, 230, 230); doc.line(M, y - 8, PW - M, y - 8);
@@ -160,7 +177,7 @@ async function exportRevisionDoc(queue, flagged) {
 
     // question label
     doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.setTextColor(150, 90, 20);
-    const label = `Q${i + 1}  ·  ${(ITEM_BY_ID[q.topicId]?.name || "General")}  ·  filed ${q.date}${q.keepCount ? `  ·  kept ${q.keepCount}x` : ""}`;
+    const label = `Q${i + 1}  ·  ${topicName(q.topicId)}  ·  filed ${q.date}${q.keepCount ? `  ·  kept ${q.keepCount}x` : ""}`;
     doc.text(label, M, y); y += 15;
 
     // question text
@@ -641,7 +658,7 @@ function StruggleBox({ state, persist, struggles, setStruggles, today, T }) {
   const [topicId, setTopicId] = useState(() => {
     if (typeof window === "undefined") return "";
     const saved = localStorage.getItem(TOPIC_MEMORY_KEY);
-    return saved && ITEM_BY_ID[saved] ? saved : "";
+    return saved && TOPIC_OPTION_BY_ID[saved] ? saved : "";
   });
   const chooseTopic = (id) => { setTopicId(id); if (id) localStorage.setItem(TOPIC_MEMORY_KEY, id); };
   const [ansText, setAnsText] = useState("");
@@ -670,7 +687,7 @@ function StruggleBox({ state, persist, struggles, setStruggles, today, T }) {
       await api.createStruggle(entry);
       setStruggles([...struggles, { ...entry, retired: false, lastTried: null, keepCount: 0 }]);
       await persist({ ...state, log: [...state.log, { date: today, type: "struggle" }] });
-      setMsg(`Filed under ${ITEM_BY_ID[topicId]?.name || "Other"}`);
+      setMsg(`Filed under ${topicName(topicId)}`);
     } catch (e) { console.error(e); setMsg("Couldn't save — try again"); }
     setText(""); setAnsText(""); setPhoto(null); setAnsPhoto(null); setShowAns(false); setBusy(false);
     setTimeout(() => setMsg(""), 4000);
@@ -694,13 +711,15 @@ function StruggleBox({ state, persist, struggles, setStruggles, today, T }) {
           outline: "none", fontWeight: topicId ? 600 : 400,
         }}>
           <option value="">Choose a topic…</option>
-          {SECTIONS.map((sec) => (
-            <optgroup key={sec.id} label={sec.name}>
-              {sec.items.map((it) => (
-                <option key={it.id} value={it.id}>{it.kind === "s" ? `${it.name} (practice set)` : it.name}</option>
-              ))}
-            </optgroup>
-          ))}
+          {SECTIONS.map((sec) => {
+            const opts = TOPIC_OPTIONS.filter((t) => t.sectionId === sec.id);
+            if (!opts.length) return null;
+            return (
+              <optgroup key={sec.id} label={sec.name}>
+                {opts.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </optgroup>
+            );
+          })}
         </select>
       </div>
 
@@ -747,7 +766,7 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
   const today = dayKey(now);
 
   const queue = struggles.filter((s) => !s.retired);
-  const filtered = filter === "all" ? queue : queue.filter((s) => ITEM_BY_ID[s.topicId]?.sectionId === filter);
+  const filtered = filter === "all" ? queue : queue.filter((s) => topicSectionId(s.topicId) === filter);
   const flagged = Object.keys(state.flags).filter((id) => state.flags[id] && ITEM_BY_ID[id]);
   const archive = struggles.filter((s) => s.retired);
 
@@ -782,7 +801,7 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 14 }}>
           {[["all", "All"], ...SECTIONS.map((s) => [s.id, s.name])].map(([k, l]) => {
             const on = filter === k;
-            const n = k === "all" ? queue.length : queue.filter((s) => ITEM_BY_ID[s.topicId]?.sectionId === k).length;
+            const n = k === "all" ? queue.length : queue.filter((s) => topicSectionId(s.topicId) === k).length;
             return <button key={k} onClick={() => setFilter(k)} style={{ padding: "7px 12px", borderRadius: 99, fontSize: 11.5, fontWeight: 700, border: `1px solid ${on ? T.accent : T.line}`, background: on ? T.card2 : "transparent", color: on ? T.accent : n ? T.mut : T.line }}>{l}{n ? ` · ${n}` : ""}</button>;
           })}
         </div>
@@ -812,7 +831,7 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
           <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8, maxHeight: 300, overflowY: "auto" }}>
             {[...archive].reverse().map((s) => (
               <div key={s.id} style={{ fontSize: 12.5, background: T.card2, borderRadius: 12, padding: 12, border: `1px solid ${T.line}`, color: T.mut }}>
-                <span style={{ fontWeight: 700, color: T.dim }}>{ITEM_BY_ID[s.topicId]?.name || "Other"}</span>
+                <span style={{ fontWeight: 700, color: T.dim }}>{topicName(s.topicId)}</span>
                 <span style={{ color: T.dim }}> · filed {s.date} · cleared {s.lastTried}{s.keepCount ? ` · took ${s.keepCount + 1} tries` : ""}</span>
                 {s.text && <div style={{ marginTop: 3, lineHeight: 1.4 }}>{s.text}</div>}
               </div>
@@ -838,12 +857,12 @@ function QueueCard({ s, now, onRetire, onKeep, T }) {
   return (
     <div className="card" style={{ padding: 16, border: `1px solid ${stale ? T.accent2 + "80" : T.line}` }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, marginBottom: 6 }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: T.accent, letterSpacing: "0.08em" }}>{(ITEM_BY_ID[s.topicId]?.name || "OTHER").toUpperCase()} · filed {s.date}{s.keepCount > 0 ? ` · kept ${s.keepCount}×` : ""}</div>
+        <div style={{ fontSize: 10, fontWeight: 700, color: T.accent, letterSpacing: "0.08em" }}>{topicName(s.topicId).toUpperCase()} · filed {s.date}{s.keepCount > 0 ? ` · kept ${s.keepCount}×` : ""}</div>
         {stale && <span style={{ fontSize: 9.5, fontWeight: 700, color: T.gold, letterSpacing: "0.08em", background: T.card2, border: `1px solid ${T.line}`, borderRadius: 99, padding: "3px 9px", flexShrink: 0 }}>UNTOUCHED {age}D</span>}
       </div>
       {s.text && <div style={{ fontSize: 13.5, lineHeight: 1.45, color: T.ink }}>{s.text}</div>}
       {img && (
-        <button onClick={() => setLightbox({ src: img, caption: `${ITEM_BY_ID[s.topicId]?.name || "Other"} · filed ${s.date}` })}
+        <button onClick={() => setLightbox({ src: img, caption: `${topicName(s.topicId)} · filed ${s.date}` })}
           style={{ display: "block", padding: 0, marginTop: 8, border: "none", background: "none", position: "relative", width: "100%", textAlign: "left" }}>
           <img src={img} alt="question" style={{ borderRadius: 10, maxHeight: 220, maxWidth: "100%", border: `1px solid ${T.line}`, display: "block" }} />
           <span style={{ position: "absolute", bottom: 8, right: 8, background: "rgba(8,6,4,.78)", border: `1px solid ${T.line}`, borderRadius: 99, padding: "4px 10px", fontSize: 10, fontWeight: 700, color: T.accent }}>tap to enlarge</span>
@@ -906,7 +925,7 @@ function Dashboard({ state, persist, struggles, now, T }) {
       const acts = state.log.filter((l) => wk.includes(l.date));
       const weekStruggles = struggles.filter((s) => wk.includes(s.date));
       const wbins = {}; weekStruggles.forEach((s) => { wbins[s.topicId] = (wbins[s.topicId] || 0) + 1; });
-      const binStr = Object.entries(wbins).map(([id, n]) => `${ITEM_BY_ID[id]?.name || "Other"}: ${n}`).join(", ");
+      const binStr = Object.entries(wbins).map(([id, n]) => `${topicName(id)}: ${n}`).join(", ");
       const summary = `Activity events this week: ${acts.length}. Progress: ${perSection}. New struggle notes this week: ${binStr || "none"}. Revision queue size: ${queueN}. Exam Nov 29. Today ${dayKey(now)}.`;
       const r = await api.digest(summary);
       await persist(stampField({ ...state, digest: r.digest, digestDate: dayKey(now) }, "digest"));
@@ -962,7 +981,7 @@ function Dashboard({ state, persist, struggles, now, T }) {
         {bins.length === 0 ? <div style={{ fontSize: 13, color: T.dim }}>Nothing filed yet.</div> : (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             {bins.map(([id, n], idx) => (
-              <span key={id} style={{ padding: "7px 14px", borderRadius: 99, fontWeight: 700, fontSize: clamp(11 + n * 1.2, 11, 17), background: T.card2, color: idx === 0 ? T.accent : T.gold, border: `1px solid ${idx === 0 ? T.accent2 + "80" : T.line}`, boxShadow: idx === 0 ? `0 0 14px ${T.accent}33` : "none" }}>{ITEM_BY_ID[id]?.name || "Other"} · {n}</span>
+              <span key={id} style={{ padding: "7px 14px", borderRadius: 99, fontWeight: 700, fontSize: clamp(11 + n * 1.2, 11, 17), background: T.card2, color: idx === 0 ? T.accent : T.gold, border: `1px solid ${idx === 0 ? T.accent2 + "80" : T.line}`, boxShadow: idx === 0 ? `0 0 14px ${T.accent}33` : "none" }}>{topicName(id)} · {n}</span>
             ))}
           </div>
         )}
