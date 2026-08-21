@@ -25,6 +25,9 @@ export const api = {
   uploadPhoto: (id, dataUrl) => call("/api/photos/upload", { method: "POST", body: JSON.stringify({ id, dataUrl }) }),
   classify: (payload) => call("/api/ai/classify", { method: "POST", body: JSON.stringify(payload) }),
   digest: (summary) => call("/api/ai/digest", { method: "POST", body: JSON.stringify({ summary }) }),
+  listBanks: () => call("/api/banks"),
+  getBank: (topic) => call(`/api/banks?topic=${encodeURIComponent(topic)}`),
+  putBank: (topicId, questions) => call("/api/banks", { method: "POST", body: JSON.stringify({ topicId, questions }) }),
 };
 
 // <img> can't send custom headers, so fetch protected photos as a blob

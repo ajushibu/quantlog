@@ -100,11 +100,20 @@ const TOPIC_OPTION_BY_ID = Object.fromEntries(TOPIC_OPTIONS.map((t) => [t.id, t]
 const topicName = (id) => TOPIC_OPTION_BY_ID[id]?.name || ITEM_BY_ID[id]?.name || "Other";
 const topicSectionId = (id) => TOPIC_OPTION_BY_ID[id]?.sectionId || ITEM_BY_ID[id]?.sectionId || null;
 
+
+const weekStart = (ds) => { const d = new Date(ds + "T00:00:00"); const off = (d.getDay() + 6) % 7; d.setDate(d.getDate() - off); return dayKey(d); };
+const weekLabel = (ws, currentWs) => {
+  if (ws === currentWs) return "This week";
+  const d = new Date(ws + "T00:00:00"); const e = new Date(d); e.setDate(e.getDate() + 6);
+  const f = (x) => x.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  return `${f(d)} – ${f(e)}`;
+};
+
 function defaultState() {
-  return { settings: { revisionDays: [0] }, items: {}, flags: {}, celebrated: {}, mocks: [], log: [], digest: "", digestDate: "", meta: {} };
+  return { settings: { revisionDays: [0] }, items: {}, flags: {}, celebrated: {}, qbStars: {}, mocks: [], log: [], digest: "", digestDate: "", meta: {} };
 }
 
-const itemDone = (st, it) => { const v = st.items[it.id] || {}; return it.kind === "s" ? !!(v.l1 && v.l2) : !!v.v; };
+const itemDone = (st, it) => { const v = st.items[it.id] || {}; return it.kind === "s" ? !!(v.qb || (v.l1 && v.l2)) : !!v.v; };
 const sectionStats = (st, s) => {
   const cls = s.items.filter((i) => i.kind !== "s");
   const sets = s.items.filter((i) => i.kind === "s");
@@ -510,6 +519,48 @@ function DaysRing({ days, T }) {
    ================================================================ */
 function Study({ state, persist, struggles, setStruggles, now, T }) {
   const today = dayKey(now);
+  const [bankTopics, setBankTopics] = useState([]);       // topic ids that have banks
+  const [openBank, setOpenBank] = useState(null);         // { topicId, name, questions } | null
+  const [bankLoading, setBankLoading] = useState(false);
+  const bankCache = useRef({});
+  useEffect(() => { api.listBanks().then((r) => setBankTopics(r.topics || [])).catch(() => {}); }, []);
+
+  const showBank = async (setItem) => {
+    if (bankCache.current[setItem.id]) { setOpenBank({ topicId: setItem.id, name: setItem.name, questions: bankCache.current[setItem.id] }); return; }
+    setBankLoading(true);
+    try {
+      const r = await api.getBank(setItem.id);
+      const qs = r.bank?.questions || [];
+      bankCache.current[setItem.id] = qs;
+      setOpenBank({ topicId: setItem.id, name: setItem.name, questions: qs });
+    } catch (e) { console.error(e); }
+    setBankLoading(false);
+  };
+
+  const starQuestion = async (q, priority) => {
+    const sid = `qb-${q.id}`;
+    const already = state.qbStars?.[q.id];
+    let next = stampItem({ ...state, qbStars: { ...state.qbStars, [q.id]: priority } }, "qbStars", q.id);
+    persist(next);
+    if (!already) {
+      const optLines = Object.entries(q.options || {}).map(([k, v]) => `(${k}) ${v}`).join("   ");
+      try {
+        await api.createStruggle({
+          id: sid, text: q.stem + (optLines ? `\n${optLines}` : ""), topicId: openBank.topicId,
+          date: today, hasPhoto: false, hasAnsPhoto: false,
+          answerText: q.source ? `Check answer in: ${q.source}` : "",
+        });
+        setStruggles((cur) => [...cur, { id: sid, text: q.stem + (optLines ? `\n${optLines}` : ""), topicId: openBank.topicId, date: today, hasPhoto: false, hasAnsPhoto: false, answerText: q.source ? `Check answer in: ${q.source}` : "", retired: false, lastTried: null, keepCount: 0 }]);
+      } catch (e) { console.error(e); }
+    }
+  };
+  const unstarQuestion = async (q) => {
+    const sid = `qb-${q.id}`;
+    const nextStars = { ...state.qbStars }; delete nextStars[q.id];
+    persist(stampItem({ ...state, qbStars: nextStars }, "qbStars", q.id));
+    try { await api.patchStruggle(sid, { retired: true, lastTried: today }); } catch (e) { console.error(e); }
+    setStruggles((cur) => cur.map((x) => (x.id === sid ? { ...x, retired: true } : x)));
+  };
   const isRevisionDay = state.settings.revisionDays.includes(now.getDay());
   const streak = streakDays(state);
   const [celebration, setCelebration] = useState(null);
@@ -568,13 +619,15 @@ function Study({ state, persist, struggles, setStruggles, now, T }) {
         })}
       </div>
 
-      {areaSections(area).map((s) => <SectionCard key={s.id} s={s} state={state} onToggle={toggle} onFlag={toggleFlag} T={T} />)}
+      {areaSections(area).map((s) => <SectionCard key={s.id} s={s} state={state} onToggle={toggle} onFlag={toggleFlag} bankTopics={bankTopics} onOpenBank={showBank} T={T} />)}
+      {bankLoading && <div style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(8,6,4,.6)", display: "grid", placeItems: "center", color: T.mut, fontSize: 13 }}>Opening bank…</div>}
+      {openBank && <BankView bank={openBank} stars={state.qbStars || {}} onStar={starQuestion} onUnstar={unstarQuestion} onClose={() => setOpenBank(null)} T={T} />}
       <StruggleBox state={state} persist={persist} struggles={struggles} setStruggles={setStruggles} today={today} T={T} />
     </>
   );
 }
 
-function SectionCard({ s, state, onToggle, onFlag, T }) {
+function SectionCard({ s, state, onToggle, onFlag, bankTopics, onOpenBank, T }) {
   const [open, setOpen] = useState(s.id === "arith" || s.id === "varc");
   const st = sectionStats(state, s);
   return (
@@ -590,7 +643,7 @@ function SectionCard({ s, state, onToggle, onFlag, T }) {
       {open && (
         <div style={{ padding: "0 12px 12px", display: "flex", flexDirection: "column", gap: 5 }}>
           {s.items.map((it) => it.kind === "s"
-            ? <SetRow key={it.id} it={it} state={state} onToggle={onToggle} onFlag={onFlag} T={T} />
+            ? <SetRow key={it.id} it={it} state={state} onToggle={onToggle} onFlag={onFlag} hasBank={(bankTopics || []).includes(it.id)} onOpenBank={onOpenBank} T={T} />
             : <ClassRow key={it.id} it={it} state={state} onToggle={onToggle} onFlag={onFlag} T={T} />)}
         </div>
       )}
@@ -627,9 +680,9 @@ function ClassRow({ it, state, onToggle, onFlag, T }) {
   );
 }
 
-function SetRow({ it, state, onToggle, onFlag, T }) {
+function SetRow({ it, state, onToggle, onFlag, hasBank, onOpenBank, T }) {
   const v = state.items[it.id] || {};
-  const done = !!(v.l1 && v.l2);
+  const done = itemDone(state, it);
   const pill = (key, label) => (
     <button onClick={() => onToggle(it.id, key)} style={{ padding: "6px 12px", borderRadius: 99, fontSize: 11, fontWeight: 700, border: `1px solid ${v[key] ? T.accent : T.line}`, background: v[key] ? (done ? `linear-gradient(90deg, ${T.accent}, ${T.accent2})` : T.card2) : "transparent", color: v[key] ? (done ? T.onAccent : T.accent) : T.dim, boxShadow: v[key] ? `0 0 8px ${T.accent}33` : "none" }}>{label}</button>
   );
@@ -637,10 +690,23 @@ function SetRow({ it, state, onToggle, onFlag, T }) {
     <div className={done ? "completed-pop" : ""} style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 10px", borderRadius: 13, margin: "2px 0", background: done ? `linear-gradient(90deg, ${T.card2}, ${T.card})` : T.card2, border: `1px solid ${done ? T.gold + "55" : T.line}`, boxShadow: done ? `0 0 16px ${T.accent}22` : "none" }}>
       <span style={{ color: done ? T.gold : T.dim, flexShrink: 0 }}>{Icon.book(done ? T.gold : T.dim)}</span>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 9, letterSpacing: "0.14em", color: done ? T.gold : T.dim, fontWeight: 700 }}>PRACTICE SET</div>
+        <div style={{ fontSize: 9, letterSpacing: "0.14em", color: done ? T.gold : T.dim, fontWeight: 700 }}>{hasBank ? "QUESTION BANK" : "PRACTICE SET"}</div>
         <div style={{ fontSize: 13.5, fontWeight: 600, color: done ? T.gold : T.ink, lineHeight: 1.3 }}>{it.name}</div>
       </div>
-      {pill("l1", "LOD 1")}{pill("l2", "LOD 2")}
+      {hasBank ? (
+        /* split pill: [ Question Bank | check ] — one capsule, two actions */
+        <div style={{ display: "flex", alignItems: "stretch", borderRadius: 99, overflow: "hidden", border: `1px solid ${done ? T.accent : T.line}`, background: done ? `linear-gradient(90deg, ${T.accent}, ${T.accent2})` : "transparent", boxShadow: done ? `0 0 10px ${T.accent}44` : "none" }}>
+          <button onClick={() => onOpenBank(it)} style={{ border: "none", background: "transparent", padding: "7px 13px", fontSize: 11, fontWeight: 700, color: done ? T.onAccent : T.accent }}>
+            Question Bank
+          </button>
+          <div style={{ width: 1, background: done ? T.onAccent + "44" : T.line }} />
+          <button onClick={() => onToggle(it.id, "qb")} aria-label="mark bank done" style={{ border: "none", background: "transparent", padding: "0 11px", display: "grid", placeItems: "center" }}>
+            {Icon.check(done ? T.onAccent : v.qb ? T.accent : T.dim, 12)}
+          </button>
+        </div>
+      ) : (
+        <>{pill("l1", "LOD 1")}{pill("l2", "LOD 2")}</>
+      )}
       <button onClick={() => onFlag(it.id)} style={{ width: 28, height: 28, borderRadius: 9, border: "none", background: "transparent", display: "grid", placeItems: "center" }}>
         {state.flags[it.id] ? Icon.bookmarkFill(T.gold) : Icon.bookmark(T.line)}
       </button>
@@ -766,7 +832,14 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
   const today = dayKey(now);
 
   const queue = struggles.filter((s) => !s.retired);
-  const filtered = filter === "all" ? queue : queue.filter((s) => topicSectionId(s.topicId) === filter);
+  const prioOf = (s) => (s.id.startsWith("qb-") ? (state.qbStars?.[s.id.slice(3)] || 0) : 0);
+  const bySection = filter === "all" ? queue : queue.filter((s) => topicSectionId(s.topicId) === filter);
+  const currentWs = weekStart(today);
+  const weeks = [...new Set(bySection.map((s) => weekStart(s.date)))].sort().reverse();
+  const [exportWeek, setExportWeek] = useState("current");
+  const weekItems = (ws) => bySection.filter((s) => weekStart(s.date) === ws)
+    .sort((a, b) => prioOf(b) - prioOf(a) || (a.date < b.date ? 1 : -1));
+  const filtered = exportWeek === "all" ? bySection : weekItems(exportWeek === "current" ? currentWs : exportWeek);
   const flagged = Object.keys(state.flags).filter((id) => state.flags[id] && ITEM_BY_ID[id]);
   const archive = struggles.filter((s) => s.retired);
 
@@ -795,6 +868,11 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
             <div className="serif" style={{ fontSize: 18, fontWeight: 600 }}>Revision queue</div>
             <div style={{ fontSize: 12, color: T.mut, marginTop: 3 }}>{queue.length} question{queue.length === 1 ? "" : "s"} waiting · {flagged.length} bookmarked</div>
           </div>
+          <select value={exportWeek} onChange={(e) => setExportWeek(e.target.value)} style={{ background: T.field, border: `1px solid ${T.line}`, borderRadius: 11, padding: "8px 8px", fontSize: 11.5, color: T.mut, outline: "none", maxWidth: 130 }}>
+            <option value="current">This week</option>
+            {weeks.filter((w) => w !== currentWs).map((w) => <option key={w} value={w}>{weekLabel(w, currentWs)}</option>)}
+            <option value="all">Everything</option>
+          </select>
           <button onClick={doExport} disabled={exporting || (filtered.length === 0 && flagged.length === 0)} style={{ display: "flex", alignItems: "center", gap: 7, background: `linear-gradient(90deg, ${T.accent}, ${T.accent2})`, border: "none", borderRadius: 11, padding: "9px 15px", fontSize: 11.5, fontWeight: 700, color: T.onAccent, opacity: exporting || (filtered.length === 0 && flagged.length === 0) ? 0.4 : 1, boxShadow: `0 0 16px ${T.accent}44`, flexShrink: 0 }}>{Icon.download(T.onAccent)} {exporting ? "Building PDF" : "Export PDF"}</button>
         </div>
         {exportErr && <div style={{ fontSize: 11.5, color: T.accent2, fontWeight: 600, marginTop: 10 }}>{exportErr}</div>}
@@ -806,9 +884,31 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
           })}
         </div>
       </div>
-      {filtered.length === 0 ? (
+      {bySection.length === 0 ? (
         <div className="card" style={{ padding: 24, textAlign: "center", fontSize: 13, color: T.mut }}>{filter === "all" ? "The queue is empty. File a question from the Study tab when something feels shaky." : "Nothing filed under this section."}</div>
-      ) : filtered.map((s) => <QueueCard key={s.id} s={s} now={now} onRetire={() => retire(s.id)} onKeep={() => keep(s.id)} T={T} />)}
+      ) : (
+        weeks.map((ws) => {
+          const items = weekItems(ws);
+          if (!items.length) return null;
+          if (ws === currentWs) return (
+            <div key={ws} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <div style={{ fontSize: 10.5, letterSpacing: "0.16em", color: T.accent, fontWeight: 700, margin: "4px 2px 0" }}>THIS WEEK · {items.length}</div>
+              {items.map((s) => <QueueCard key={s.id} s={s} prio={prioOf(s)} now={now} onRetire={() => retire(s.id)} onKeep={() => keep(s.id)} T={T} />)}
+            </div>
+          );
+          return (
+            <details key={ws} className="card" style={{ padding: "4px 0" }}>
+              <summary style={{ cursor: "pointer", listStyle: "none", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "13px 18px" }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: T.mut }}>{weekLabel(ws, currentWs)}</span>
+                <span style={{ fontSize: 11.5, color: T.dim }}>{items.length} question{items.length === 1 ? "" : "s"} {Icon.chevron(false, T.dim)}</span>
+              </summary>
+              <div style={{ padding: "0 12px 12px", display: "flex", flexDirection: "column", gap: 10 }}>
+                {items.map((s) => <QueueCard key={s.id} s={s} prio={prioOf(s)} now={now} onRetire={() => retire(s.id)} onKeep={() => keep(s.id)} T={T} />)}
+              </div>
+            </details>
+          );
+        })
+      )}
       {flagged.length > 0 && (
         <div className="card" style={{ padding: 20 }}>
           <div className="serif" style={{ fontSize: 16, fontWeight: 600, marginBottom: 10 }}>Bookmarked for revision</div>
@@ -843,7 +943,7 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
   );
 }
 
-function QueueCard({ s, now, onRetire, onKeep, T }) {
+function QueueCard({ s, prio, now, onRetire, onKeep, T }) {
   const [img, setImg] = useState(null);
   const [lightbox, setLightbox] = useState(null);
   const [ansImg, setAnsImg] = useState(null);
@@ -857,7 +957,7 @@ function QueueCard({ s, now, onRetire, onKeep, T }) {
   return (
     <div className="card" style={{ padding: 16, border: `1px solid ${stale ? T.accent2 + "80" : T.line}` }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, marginBottom: 6 }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: T.accent, letterSpacing: "0.08em" }}>{topicName(s.topicId).toUpperCase()} · filed {s.date}{s.keepCount > 0 ? ` · kept ${s.keepCount}×` : ""}</div>
+        <div style={{ fontSize: 10, fontWeight: 700, color: T.accent, letterSpacing: "0.08em" }}>{prio ? <span style={{ color: T.gold }}>{"★".repeat(prio)} </span> : null}{topicName(s.topicId).toUpperCase()} · filed {s.date}{s.keepCount > 0 ? ` · kept ${s.keepCount}×` : ""}</div>
         {stale && <span style={{ fontSize: 9.5, fontWeight: 700, color: T.gold, letterSpacing: "0.08em", background: T.card2, border: `1px solid ${T.line}`, borderRadius: 99, padding: "3px 9px", flexShrink: 0 }}>UNTOUCHED {age}D</span>}
       </div>
       {s.text && <div style={{ fontSize: 13.5, lineHeight: 1.45, color: T.ink }}>{s.text}</div>}
@@ -1008,6 +1108,8 @@ function Dashboard({ state, persist, struggles, now, T }) {
         </div>
         <div style={{ fontSize: 10, color: T.dim, marginTop: 16 }}>Data lives in your own Supabase project, behind your access code. Photos are private and only ever fetched through the server.</div>
       </div>
+
+      <BankAdminCard T={T} />
 
       <ResetCard state={state} persist={persist} T={T} />
     </>
@@ -1509,5 +1611,160 @@ function Stat({ label, value, sub, T, color }) {
       <div className="serif" style={{ fontSize: 20, fontWeight: 700, color: color || T.ink, marginTop: 4 }}>{value}</div>
       <div style={{ fontSize: 10, color: T.mut, marginTop: 1 }}>{sub}</div>
     </div>
+  );
+}
+
+/* ================================================================
+   QUESTION BANK VIEWER
+   ================================================================ */
+const DIFF_ORDER = ["easy", "medium", "hard"];
+const DIFF_LABEL = { easy: "Warm-up", medium: "Core", hard: "Stretch" };
+
+function BankView({ bank, stars, onStar, onUnstar, onClose, T }) {
+  const [starPicker, setStarPicker] = useState(null); // question id | null
+  useEffect(() => {
+    const onKey = (e) => e.key === "Escape" && onClose();
+    document.addEventListener("keydown", onKey);
+    document.body.style.overflow = "hidden";
+    return () => { document.removeEventListener("keydown", onKey); document.body.style.overflow = ""; };
+  }, []);
+
+  const groups = DIFF_ORDER.map((d) => ({ d, qs: bank.questions.filter((q) => q.difficulty === d) })).filter((g) => g.qs.length);
+  const starredN = bank.questions.filter((q) => stars[q.id]).length;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 70, background: T.bgGrad, display: "flex", flexDirection: "column" }}>
+      <div style={{ padding: "16px 18px 12px", borderBottom: `1px solid ${T.line}`, display: "flex", alignItems: "center", gap: 12, flexShrink: 0, paddingTop: "calc(16px + env(safe-area-inset-top))" }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="serif" style={{ fontSize: 20, fontWeight: 600, color: T.ink }}>{bank.name}</div>
+          <div style={{ fontSize: 11.5, color: T.mut, marginTop: 2 }}>{bank.questions.length} questions{starredN ? ` · ${starredN} starred for revision` : ""} · answers in the book</div>
+        </div>
+        <button onClick={onClose} style={{ background: T.card2, border: `1px solid ${T.line}`, borderRadius: 99, padding: "8px 16px", fontSize: 12, fontWeight: 700, color: T.mut, flexShrink: 0 }}>Close</button>
+      </div>
+
+      <div style={{ flex: 1, overflowY: "auto", padding: "14px 16px 60px", WebkitOverflowScrolling: "touch" }}>
+        {groups.map(({ d, qs }) => (
+          <div key={d} style={{ marginBottom: 22 }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8, margin: "6px 2px 10px" }}>
+              <span className="serif" style={{ fontSize: 16, fontWeight: 600, color: d === "hard" ? T.accent2 : d === "medium" ? T.accent : T.good }}>{DIFF_LABEL[d]}</span>
+              <span style={{ fontSize: 11, color: T.dim }}>{qs.length} · {d}</span>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {qs.map((q, i) => {
+                const starred = stars[q.id];
+                return (
+                  <div key={q.id} className="card" style={{ padding: 14, border: `1px solid ${starred ? T.gold + "55" : T.line}` }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 7 }}>
+                      <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: "0.08em", color: T.dim }}>
+                        {i + 1}. {q.type ? q.type.toUpperCase() : ""}
+                      </div>
+                      <div style={{ position: "relative", flexShrink: 0 }}>
+                        <button onClick={() => setStarPicker(starPicker === q.id ? null : q.id)}
+                          style={{ background: "none", border: "none", fontSize: 13, fontWeight: 700, color: starred ? T.gold : T.dim, padding: 0, letterSpacing: 1 }}>
+                          {starred ? "★".repeat(starred) : "☆ revise"}
+                        </button>
+                        {starPicker === q.id && (
+                          <div className="card" style={{ position: "absolute", right: 0, top: 22, zIndex: 5, padding: 6, display: "flex", gap: 4, whiteSpace: "nowrap" }}>
+                            {[1, 2, 3].map((p) => (
+                              <button key={p} onClick={() => { onStar(q, p); setStarPicker(null); }}
+                                style={{ background: starred === p ? T.card2 : "transparent", border: `1px solid ${T.line}`, borderRadius: 8, padding: "6px 9px", fontSize: 12, color: T.gold, fontWeight: 700 }}>
+                                {"★".repeat(p)}
+                              </button>
+                            ))}
+                            {starred && (
+                              <button onClick={() => { onUnstar(q); setStarPicker(null); }}
+                                style={{ background: "transparent", border: `1px solid ${T.line}`, borderRadius: 8, padding: "6px 9px", fontSize: 11, color: T.dim, fontWeight: 700 }}>
+                                remove
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 13.5, lineHeight: 1.55, color: T.ink }}>{q.stem}</div>
+                    {Object.keys(q.options || {}).length > 0 && (
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "5px 14px", marginTop: 10 }}>
+                        {Object.entries(q.options).map(([k, v]) => (
+                          <div key={k} style={{ fontSize: 12.5, color: T.mut }}><span style={{ color: T.dim, fontWeight: 700 }}>({k})</span> {v}</div>
+                        ))}
+                      </div>
+                    )}
+                    {q.source && <div style={{ fontSize: 9.5, color: T.dim, marginTop: 9 }}>{q.source}</div>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+        <div style={{ textAlign: "center", fontSize: 11, color: T.dim, marginTop: 8, lineHeight: 1.6 }}>
+          Solve on paper, check answers in the book.<br />Star anything worth revisiting — it joins the revision queue automatically.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* Quiet admin corner: upload the curated question-bank JSON per topic.
+   Collapsed by default so it never clutters the dashboard. */
+function BankAdminCard({ T }) {
+  const [topicId, setTopicId] = useState("");
+  const [existing, setExisting] = useState([]);
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const fileRef = useRef();
+
+  const refresh = () => api.listBanks().then((r) => setExisting(r.topics || [])).catch(() => {});
+  useEffect(() => { refresh(); }, []);
+
+  const upload = async (e) => {
+    const f = e.target.files?.[0]; e.target.value = "";
+    if (!f || !topicId) { setMsg("Pick a topic first, then choose the file."); return; }
+    setBusy(true); setMsg("");
+    try {
+      const raw = JSON.parse(await f.text());
+      let qs = Array.isArray(raw) ? raw : raw.questions || [];
+      // combined multi-chapter files: keep only this topic's questions if tagged
+      const tName = TOPIC_OPTION_BY_ID[topicId]?.name;
+      if (qs.some((q) => q.chapter) && tName) {
+        const subset = qs.filter((q) => (q.chapter || "").toLowerCase() === tName.toLowerCase());
+        if (subset.length) qs = subset;
+      }
+      if (!qs.length) { setMsg("No questions found for this topic in that file."); setBusy(false); return; }
+      const r = await api.putBank(topicId, qs);
+      setMsg(`Saved ${r.count} questions to ${tName}.`);
+      refresh();
+    } catch (err) {
+      console.error(err);
+      setMsg("That file couldn't be read — is it the JSON I generated?");
+    }
+    setBusy(false);
+  };
+
+  return (
+    <details className="card" style={{ padding: "4px 0" }}>
+      <summary style={{ cursor: "pointer", listStyle: "none", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 20px" }}>
+        <span className="serif" style={{ fontSize: 16, fontWeight: 600 }}>Question banks</span>
+        <span style={{ fontSize: 11, color: T.dim }}>{existing.length} loaded {Icon.chevron(false, T.dim)}</span>
+      </summary>
+      <div style={{ padding: "4px 20px 18px" }}>
+        <div style={{ fontSize: 12, color: T.mut, marginBottom: 12, lineHeight: 1.5 }}>Upload the curated JSON for a topic. The topic's row on the Study tab switches from LOD pills to a Question Bank automatically.</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <select value={topicId} onChange={(e) => setTopicId(e.target.value)} style={{ flex: 1, minWidth: 170, background: T.field, border: `1px solid ${T.line}`, borderRadius: 11, padding: "10px 10px", fontSize: 12.5, color: topicId ? T.ink : T.dim, outline: "none" }}>
+            <option value="">Choose topic…</option>
+            {TOPIC_OPTIONS.map((t) => <option key={t.id} value={t.id}>{t.sectionName} — {t.name}{existing.includes(t.id) ? " ✓" : ""}</option>)}
+          </select>
+          <button onClick={() => fileRef.current.click()} disabled={busy || !topicId} style={{ background: T.card2, border: `1px solid ${T.line}`, borderRadius: 11, padding: "10px 15px", fontSize: 12, fontWeight: 700, color: topicId ? T.accent : T.dim, opacity: busy ? 0.5 : 1 }}>
+            {busy ? "Uploading…" : "Choose JSON"}
+          </button>
+        </div>
+        {msg && <div style={{ fontSize: 12, fontWeight: 600, color: msg.startsWith("Saved") ? T.good : T.accent2, marginTop: 10 }}>{msg}</div>}
+        {existing.length > 0 && (
+          <div style={{ fontSize: 11, color: T.dim, marginTop: 12 }}>
+            Loaded: {existing.map((id) => TOPIC_OPTION_BY_ID[id]?.name || id).join(", ")}
+          </div>
+        )}
+      </div>
+      <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }} onChange={upload} />
+    </details>
   );
 }

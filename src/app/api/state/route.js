@@ -25,6 +25,7 @@ function mergeState(remote, local) {
   const [items, itemsMeta] = mergeStamped(remote.items, local.items, rMeta.items || {}, lMeta.items || {});
   const [flags, flagsMeta] = mergeStamped(remote.flags, local.flags, rMeta.flags || {}, lMeta.flags || {});
   const [celebrated, celebratedMeta] = mergeStamped(remote.celebrated, local.celebrated, rMeta.celebrated || {}, lMeta.celebrated || {});
+  const [qbStars, qbStarsMeta] = mergeStamped(remote.qbStars, local.qbStars, rMeta.qbStars || {}, lMeta.qbStars || {});
 
   // log is append-only: union, de-duplicated
   const seen = new Set();
@@ -42,12 +43,12 @@ function mergeState(remote, local) {
   const mocks = [...mockMap.values()];
 
   return {
-    items, flags, celebrated, mocks, log,
+    items, flags, celebrated, qbStars, mocks, log,
     settings: (newerLocal("settings") ? local.settings : remote.settings) || local.settings || remote.settings,
     digest: newerLocal("digest") ? (local.digest ?? "") : (remote.digest ?? ""),
     digestDate: newerLocal("digest") ? (local.digestDate ?? "") : (remote.digestDate ?? ""),
     meta: {
-      items: itemsMeta, flags: flagsMeta, celebrated: celebratedMeta,
+      items: itemsMeta, flags: flagsMeta, celebrated: celebratedMeta, qbStars: qbStarsMeta,
       settings: Math.max(rMeta.settings || 0, lMeta.settings || 0),
       mocks: Math.max(rMeta.mocks || 0, lMeta.mocks || 0),
       digest: Math.max(rMeta.digest || 0, lMeta.digest || 0),
