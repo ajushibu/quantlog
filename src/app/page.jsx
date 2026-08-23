@@ -185,6 +185,24 @@ function compressImage(file, maxDim = 1000, quality = 0.72) {
 /* Real PDF, not HTML-renamed-to-.doc (which iOS shows as raw markup).
    Text and photos are laid out in order, paginated, so a question that has
    both reads as one block. */
+/* jsPDF's built-in fonts only speak Latin-1. Anything outside it (₹, ★, curly
+   quotes, em-dashes) renders as broken glyphs with stray spacing — so every
+   string is passed through this before printing. */
+function pdfSafe(t) {
+  return String(t || "")
+    .replace(/₹\s?/g, "Rs. ")
+    .replace(/[—–]/g, "-")
+    .replace(/[’‘]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/[★]/g, "*")
+    .replace(/[☆]/g, "")
+    .replace(/…/g, "...")
+    .replace(/[×✕]/g, "x")
+    .replace(/\u00A0/g, " ")
+    .replace(/[^\x00-\xFF\n]/g, "")
+    .replace(/[ \t]{2,}/g, " ");
+}
+
 async function exportRevisionDoc(queue, flagged) {
   const { jsPDF } = await import("jspdf");
   const doc = new jsPDF({ unit: "pt", format: "a4" });
@@ -207,7 +225,7 @@ async function exportRevisionDoc(queue, flagged) {
     doc.setFont("helvetica", "bold"); doc.setFontSize(9.5); doc.setTextColor(70, 70, 70);
     doc.text("Also revisit notes for:", M, y); y += 13;
     doc.setFont("helvetica", "normal"); doc.setTextColor(110, 110, 110);
-    const names = flagged.map((id) => topicName(id)).filter(Boolean).join(", ");
+    const names = pdfSafe(flagged.map((id) => topicName(id)).filter(Boolean).join(", "));
     const lines = doc.splitTextToSize(names, CW);
     doc.text(lines, M, y); y += lines.length * 12 + 16;
     doc.setDrawColor(230, 230, 230); doc.line(M, y - 8, PW - M, y - 8);
@@ -219,13 +237,20 @@ async function exportRevisionDoc(queue, flagged) {
 
     // question label
     doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.setTextColor(150, 90, 20);
-    const label = `Q${i + 1}  ·  ${topicName(q.topicId)}  ·  filed ${q.date}${q.keepCount ? `  ·  missed ${q.keepCount}x` : ""}`;
-    doc.text(label, M, y); y += 15;
+    const label = pdfSafe(`Q${i + 1}  -  ${topicName(q.topicId)}  -  filed ${q.date}${q.keepCount ? `  -  missed ${q.keepCount}x` : ""}`);
+    doc.text(label, M, y); y += 13;
+
+    // where to find it (and its answer) in the book
+    const srcRef = q.answerText && q.answerText.startsWith("Check answer in: ") ? q.answerText.slice("Check answer in: ".length) : "";
+    if (srcRef) {
+      doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); doc.setTextColor(130, 130, 130);
+      doc.text(pdfSafe(`Source: ${srcRef}`), M, y); y += 13;
+    } else { y += 2; }
 
     // question text
     if (q.text) {
       doc.setFont("times", "normal"); doc.setFontSize(12); doc.setTextColor(25, 25, 25);
-      const lines = doc.splitTextToSize(q.text, CW);
+      const lines = doc.splitTextToSize(pdfSafe(q.text), CW);
       for (const ln of lines) { need(16); doc.text(ln, M, y); y += 15; }
       y += 4;
     }
