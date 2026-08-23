@@ -109,8 +109,24 @@ const weekLabel = (ws, currentWs) => {
   return `${f(d)} – ${f(e)}`;
 };
 
+
+/* Spaced repetition.
+   A question is shown when it is DUE, not because of the week it was filed in.
+   First gap depends on how hard she marked it; a "still shaky" resets it to a
+   short gap (that is the point of marking it shaky) which stretches only
+   slightly if she keeps missing it, so it neither nags daily nor drifts away. */
+const FIRST_GAP = { 3: 2, 2: 4, 1: 7, 0: 4 };   // priority -> days
+const LAPSE_GAPS = [2, 3, 5];                    // successive "still shaky" gaps
+const addDays = (ds, n) => { const d = new Date(ds + "T00:00:00"); d.setDate(d.getDate() + n); return dayKey(d); };
+const schedOf = (state, s) => (state.sched || {})[s.id] || null;
+/* legacy items (filed before scheduling existed) are simply due now */
+const dueDate = (state, s) => schedOf(state, s)?.due || s.date;
+const isDue = (state, s, today) => dueDate(state, s) <= today;
+const prioOfItem = (state, s) => schedOf(state, s)?.p || (s.id.startsWith("qb-") ? (state.qbStars?.[s.id.slice(3)] || 0) : 0);
+const daysUntil = (ds, today) => Math.round((new Date(ds + "T00:00:00") - new Date(today + "T00:00:00")) / 864e5);
+
 function defaultState() {
-  return { settings: { revisionDays: [0] }, items: {}, flags: {}, celebrated: {}, qbStars: {}, mocks: [], log: [], digest: "", digestDate: "", meta: {} };
+  return { settings: { revisionDays: [0] }, items: {}, flags: {}, celebrated: {}, qbStars: {}, sched: {}, mocks: [], log: [], digest: "", digestDate: "", meta: {} };
 }
 
 const itemDone = (st, it) => { const v = st.items[it.id] || {}; return it.kind === "s" ? !!(v.qb || (v.l1 && v.l2)) : !!v.v; };
@@ -167,7 +183,7 @@ async function exportRevisionDoc(queue, flagged) {
   doc.setFont("times", "bold"); doc.setFontSize(20); doc.setTextColor(20, 20, 20);
   doc.text("Revision Sheet", M, y + 6); y += 26;
   doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(120, 120, 120);
-  doc.text(`${new Date().toDateString()}  ·  ${queue.length} question${queue.length === 1 ? "" : "s"}`, M, y); y += 14;
+  doc.text(`${new Date().toDateString()}  ·  ${queue.length} question${queue.length === 1 ? "" : "s"} due`, M, y); y += 14;
   doc.setDrawColor(210, 210, 210); doc.line(M, y, PW - M, y); y += 22;
 
   if (flagged.length) {
@@ -186,7 +202,7 @@ async function exportRevisionDoc(queue, flagged) {
 
     // question label
     doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.setTextColor(150, 90, 20);
-    const label = `Q${i + 1}  ·  ${topicName(q.topicId)}  ·  filed ${q.date}${q.keepCount ? `  ·  kept ${q.keepCount}x` : ""}`;
+    const label = `Q${i + 1}  ·  ${topicName(q.topicId)}  ·  filed ${q.date}${q.keepCount ? `  ·  missed ${q.keepCount}x` : ""}`;
     doc.text(label, M, y); y += 15;
 
     // question text
@@ -426,7 +442,7 @@ function GlobalStyle({ T }) {
       input, textarea { font-family: inherit; }
       details summary::-webkit-details-marker { display:none; }
       .card { background:${T.card}; border:1px solid ${T.line}; border-radius:20px; }
-      .glowText { text-shadow: 0 0 22px ${T.accent}66; }
+      .glowText { text-shadow: ${T.light ? "none" : `0 0 22px ${T.accent}66`}; }
       @keyframes emberIn { 0%{transform:scale(.985)} 60%{transform:scale(1.006)} 100%{transform:scale(1)} }
       .completed-pop { animation: emberIn .4s ease; }
       @media (prefers-reduced-motion: reduce){ .completed-pop{animation:none} }
@@ -540,7 +556,9 @@ function Study({ state, persist, struggles, setStruggles, now, T }) {
   const starQuestion = async (q, priority) => {
     const sid = `qb-${q.id}`;
     const already = state.qbStars?.[q.id];
+    const sid2 = `qb-${q.id}`;
     let next = stampItem({ ...state, qbStars: { ...state.qbStars, [q.id]: priority } }, "qbStars", q.id);
+    next = stampItem({ ...next, sched: { ...next.sched, [sid2]: { p: priority, lapses: 0, due: addDays(today, FIRST_GAP[priority] || 4) } } }, "sched", sid2);
     persist(next);
     if (!already) {
       const optLines = Object.entries(q.options || {}).map(([k, v]) => `(${k}) ${v}`).join("   ");
@@ -556,10 +574,15 @@ function Study({ state, persist, struggles, setStruggles, now, T }) {
   };
   const unstarQuestion = async (q) => {
     const sid = `qb-${q.id}`;
+    // clear the star AND its schedule locally first, so the UI updates even
+    // if the network call fails
     const nextStars = { ...state.qbStars }; delete nextStars[q.id];
-    persist(stampItem({ ...state, qbStars: nextStars }, "qbStars", q.id));
-    try { await api.patchStruggle(sid, { retired: true, lastTried: today }); } catch (e) { console.error(e); }
+    const nextSched = { ...(state.sched || {}) }; delete nextSched[sid];
+    let next = stampItem({ ...state, qbStars: nextStars, sched: nextSched }, "qbStars", q.id);
+    next = stampItem(next, "sched", sid);
+    persist(next);
     setStruggles((cur) => cur.map((x) => (x.id === sid ? { ...x, retired: true } : x)));
+    try { await api.patchStruggle(sid, { retired: true, lastTried: today }); } catch (e) { console.error(e); }
   };
   const isRevisionDay = state.settings.revisionDays.includes(now.getDay());
   const streak = streakDays(state);
@@ -620,7 +643,7 @@ function Study({ state, persist, struggles, setStruggles, now, T }) {
       </div>
 
       {areaSections(area).map((s) => <SectionCard key={s.id} s={s} state={state} onToggle={toggle} onFlag={toggleFlag} bankTopics={bankTopics} onOpenBank={showBank} T={T} />)}
-      {bankLoading && <div style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(8,6,4,.6)", display: "grid", placeItems: "center", color: T.mut, fontSize: 13 }}>Opening bank…</div>}
+      {bankLoading && <div style={{ position: "fixed", inset: 0, zIndex: 60, background: T.light ? "rgba(60,45,50,.35)" : "rgba(8,6,4,.6)", display: "grid", placeItems: "center", color: T.mut, fontSize: 13 }}>Opening bank…</div>}
       {openBank && <BankView bank={openBank} stars={state.qbStars || {}} onStar={starQuestion} onUnstar={unstarQuestion} onClose={() => setOpenBank(null)} T={T} />}
       <StruggleBox state={state} persist={persist} struggles={struggles} setStruggles={setStruggles} today={today} T={T} />
     </>
@@ -751,6 +774,8 @@ function StruggleBox({ state, persist, struggles, setStruggles, today, T }) {
       if (ansPhoto) await api.uploadPhoto(`${id}-ans`, ansPhoto);
       const entry = { id, text: text.trim(), topicId, date: today, hasPhoto: !!photo, hasAnsPhoto: !!ansPhoto, answerText: ansText.trim() };
       await api.createStruggle(entry);
+      // hand-filed questions default to the medium gap
+      await persist(stampItem({ ...state, sched: { ...state.sched, [id]: { p: 2, lapses: 0, due: addDays(today, FIRST_GAP[2]) } } }, "sched", id));
       setStruggles([...struggles, { ...entry, retired: false, lastTried: null, keepCount: 0 }]);
       await persist({ ...state, log: [...state.log, { date: today, type: "struggle" }] });
       setMsg(`Filed under ${topicName(topicId)}`);
@@ -832,14 +857,24 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
   const today = dayKey(now);
 
   const queue = struggles.filter((s) => !s.retired);
-  const prioOf = (s) => (s.id.startsWith("qb-") ? (state.qbStars?.[s.id.slice(3)] || 0) : 0);
+  const prioOf = (s) => prioOfItem(state, s);
   const bySection = filter === "all" ? queue : queue.filter((s) => topicSectionId(s.topicId) === filter);
-  const currentWs = weekStart(today);
-  const weeks = [...new Set(bySection.map((s) => weekStart(s.date)))].sort().reverse();
-  const [exportWeek, setExportWeek] = useState("current");
-  const weekItems = (ws) => bySection.filter((s) => weekStart(s.date) === ws)
-    .sort((a, b) => prioOf(b) - prioOf(a) || (a.date < b.date ? 1 : -1));
-  const filtered = exportWeek === "all" ? bySection : weekItems(exportWeek === "current" ? currentWs : exportWeek);
+  const [exportScope, setExportScope] = useState("due");
+  const [tour, setTour] = useState(false);
+  const [tourLeft, setTourLeft] = useState(3);
+  useEffect(() => { setTourLeft(Math.max(0, 3 - tutorialViews())); }, []);
+  const startTour = () => {
+    const n = tutorialViews() + 1;
+    localStorage.setItem(TUTORIAL_KEY, String(n));
+    setTourLeft(Math.max(0, 3 - n));
+    setTour(true);
+  };
+
+  const byUrgency = (a, b) => prioOf(b) - prioOf(a) || (dueDate(state, a) < dueDate(state, b) ? -1 : 1);
+  const due = bySection.filter((s) => isDue(state, s, today)).sort(byUrgency);
+  const upcoming = bySection.filter((s) => !isDue(state, s, today))
+    .sort((a, b) => (dueDate(state, a) < dueDate(state, b) ? -1 : 1));
+  const filtered = exportScope === "all" ? [...due, ...upcoming] : due;
   const flagged = Object.keys(state.flags).filter((id) => state.flags[id] && ITEM_BY_ID[id]);
   const archive = struggles.filter((s) => s.retired);
 
@@ -848,8 +883,30 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
     try { await api.patchStruggle(id, patch); } catch (e) { console.error(e); }
     await persist({ ...state, log: [...state.log, { date: today, type: "revision" }] });
   };
-  const retire = (id) => update(id, { retired: true, lastTried: today });
-  const keep = (id) => { const s = struggles.find((x) => x.id === id); update(id, { lastTried: today, keepCount: (s?.keepCount || 0) + 1 }); };
+  const retire = (id) => {
+    update(id, { retired: true, lastTried: today });
+    const nextSched = { ...state.sched }; delete nextSched[id];
+    persist(stampItem({ ...state, sched: nextSched }, "sched", id));
+    if (id.startsWith("qb-")) {
+      const qid = id.slice(3);
+      const nextStars = { ...state.qbStars }; delete nextStars[qid];
+      persist(stampItem({ ...state, qbStars: nextStars }, "qbStars", qid));
+    }
+  };
+  const keep = (id) => {
+    const st = struggles.find((x) => x.id === id);
+    update(id, { lastTried: today, keepCount: (st?.keepCount || 0) + 1 });
+    // she could not do it: bring it back soon, and treat it as hardest priority
+    const cur = (state.sched || {})[id] || { lapses: 0 };
+    const lapses = Math.min((cur.lapses || 0) + 1, LAPSE_GAPS.length - 1);
+    let next = stampItem({ ...state, sched: { ...state.sched, [id]: { p: 3, lapses, due: addDays(today, LAPSE_GAPS[lapses]) } } }, "sched", id);
+    if (id.startsWith("qb-")) next = stampItem({ ...next, qbStars: { ...next.qbStars, [id.slice(3)]: 3 } }, "qbStars", id.slice(3));
+    persist(next);
+  };
+  const reviewEarly = (id) => {
+    const nextSched = { ...state.sched, [id]: { ...(state.sched?.[id] || { p: 2, lapses: 0 }), due: today } };
+    persist(stampItem({ ...state, sched: nextSched }, "sched", id));
+  };
   const unflag = (id) => persist(stampItem({ ...state, flags: { ...state.flags, [id]: false }, log: [...state.log, { date: today, type: "revision", seq: Date.now() }] }, "flags", id));
 
   const [exportErr, setExportErr] = useState("");
@@ -865,13 +922,19 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
       <div className="card" style={{ padding: 20 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
           <div>
-            <div className="serif" style={{ fontSize: 18, fontWeight: 600 }}>Revision queue</div>
-            <div style={{ fontSize: 12, color: T.mut, marginTop: 3 }}>{queue.length} question{queue.length === 1 ? "" : "s"} waiting · {flagged.length} bookmarked</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+              <span className="serif" style={{ fontSize: 18, fontWeight: 600 }}>Revision queue</span>
+              {tourLeft > 0 && (
+                <button onClick={startTour} style={{ background: T.card2, border: `1px solid ${T.line}`, borderRadius: 99, padding: "4px 11px", fontSize: 10.5, fontWeight: 700, color: T.accent }}>
+                  Tutorial
+                </button>
+              )}
+            </div>
+            <div style={{ fontSize: 12, color: T.mut, marginTop: 3 }}>{due.length} due now · {upcoming.length} scheduled · {flagged.length} bookmarked</div>
           </div>
-          <select value={exportWeek} onChange={(e) => setExportWeek(e.target.value)} style={{ background: T.field, border: `1px solid ${T.line}`, borderRadius: 11, padding: "8px 8px", fontSize: 11.5, color: T.mut, outline: "none", maxWidth: 130 }}>
-            <option value="current">This week</option>
-            {weeks.filter((w) => w !== currentWs).map((w) => <option key={w} value={w}>{weekLabel(w, currentWs)}</option>)}
-            <option value="all">Everything</option>
+          <select data-tour="export" value={exportScope} onChange={(e) => setExportScope(e.target.value)} style={{ background: T.field, border: `1px solid ${T.line}`, borderRadius: 11, padding: "8px 8px", fontSize: 11.5, color: T.mut, outline: "none", maxWidth: 130 }}>
+            <option value="due">Due now ({due.length})</option>
+            <option value="all">Everything active ({bySection.length})</option>
           </select>
           <button onClick={doExport} disabled={exporting || (filtered.length === 0 && flagged.length === 0)} style={{ display: "flex", alignItems: "center", gap: 7, background: `linear-gradient(90deg, ${T.accent}, ${T.accent2})`, border: "none", borderRadius: 11, padding: "9px 15px", fontSize: 11.5, fontWeight: 700, color: T.onAccent, opacity: exporting || (filtered.length === 0 && flagged.length === 0) ? 0.4 : 1, boxShadow: `0 0 16px ${T.accent}44`, flexShrink: 0 }}>{Icon.download(T.onAccent)} {exporting ? "Building PDF" : "Export PDF"}</button>
         </div>
@@ -885,30 +948,53 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
         </div>
       </div>
       {bySection.length === 0 ? (
-        <div className="card" style={{ padding: 24, textAlign: "center", fontSize: 13, color: T.mut }}>{filter === "all" ? "The queue is empty. File a question from the Study tab when something feels shaky." : "Nothing filed under this section."}</div>
+        <div className="card" style={{ padding: 24, textAlign: "center", fontSize: 13, color: T.mut }}>{filter === "all" ? "The queue is empty. Star a question in a Question Bank, or file one from the Study tab." : "Nothing filed under this section."}</div>
       ) : (
-        weeks.map((ws) => {
-          const items = weekItems(ws);
-          if (!items.length) return null;
-          if (ws === currentWs) return (
-            <div key={ws} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              <div style={{ fontSize: 10.5, letterSpacing: "0.16em", color: T.accent, fontWeight: 700, margin: "4px 2px 0" }}>THIS WEEK · {items.length}</div>
-              {items.map((s) => <QueueCard key={s.id} s={s} prio={prioOf(s)} now={now} onRetire={() => retire(s.id)} onKeep={() => keep(s.id)} T={T} />)}
+        <>
+          {due.length > 0 ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div data-tour="due" style={{ fontSize: 10.5, letterSpacing: "0.16em", color: T.accent, fontWeight: 700, margin: "4px 2px 0" }}>DUE NOW · {due.length}</div>
+              {due.map((s, idx) => <QueueCard key={s.id} s={s} tourAnchor={idx === 0} prio={prioOf(s)} dueIn={daysUntil(dueDate(state, s), today)} now={now} onRetire={() => retire(s.id)} onKeep={() => keep(s.id)} T={T} />)}
             </div>
-          );
-          return (
-            <details key={ws} className="card" style={{ padding: "4px 0" }}>
-              <summary style={{ cursor: "pointer", listStyle: "none", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "13px 18px" }}>
-                <span style={{ fontSize: 13, fontWeight: 600, color: T.mut }}>{weekLabel(ws, currentWs)}</span>
-                <span style={{ fontSize: 11.5, color: T.dim }}>{items.length} question{items.length === 1 ? "" : "s"} {Icon.chevron(false, T.dim)}</span>
+          ) : (
+            <div className="card" style={{ padding: 22, textAlign: "center" }}>
+              <div className="serif" style={{ fontSize: 17, fontWeight: 600, color: T.gold }}>Nothing due today</div>
+              <div style={{ fontSize: 12.5, color: T.mut, marginTop: 5, lineHeight: 1.5 }}>
+                {upcoming.length ? `${upcoming.length} question${upcoming.length === 1 ? "" : "s"} waiting — the nearest comes back in ${Math.max(0, daysUntil(dueDate(state, upcoming[0]), today))} day${daysUntil(dueDate(state, upcoming[0]), today) === 1 ? "" : "s"}.` : "The queue is clear."}
+              </div>
+            </div>
+          )}
+
+          {upcoming.length > 0 && (
+            <details className="card" style={{ padding: "4px 0" }}>
+              <summary data-tour="upcoming" style={{ cursor: "pointer", listStyle: "none", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "13px 18px" }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: T.mut }}>Coming up</span>
+                <span style={{ fontSize: 11.5, color: T.dim }}>{upcoming.length} scheduled {Icon.chevron(false, T.dim)}</span>
               </summary>
-              <div style={{ padding: "0 12px 12px", display: "flex", flexDirection: "column", gap: 10 }}>
-                {items.map((s) => <QueueCard key={s.id} s={s} prio={prioOf(s)} now={now} onRetire={() => retire(s.id)} onKeep={() => keep(s.id)} T={T} />)}
+              <div style={{ padding: "0 14px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+                {upcoming.map((s) => {
+                  const d = daysUntil(dueDate(state, s), today);
+                  return (
+                    <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 10, background: T.card2, border: `1px solid ${T.line}`, borderRadius: 12, padding: "11px 13px" }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: "0.08em", color: T.dim }}>
+                          {prioOf(s) ? <span style={{ color: T.gold }}>{"★".repeat(prioOf(s))} </span> : null}{topicName(s.topicId).toUpperCase()}
+                        </div>
+                        <div style={{ fontSize: 12.5, color: T.mut, marginTop: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.text || "photo question"}</div>
+                      </div>
+                      <span style={{ fontSize: 10.5, color: T.dim, flexShrink: 0 }}>in {d}d</span>
+                      <button onClick={() => reviewEarly(s.id)} style={{ background: "transparent", border: `1px solid ${T.line}`, borderRadius: 99, padding: "6px 11px", fontSize: 10.5, fontWeight: 700, color: T.accent, flexShrink: 0 }}>Review now</button>
+                    </div>
+                  );
+                })}
               </div>
             </details>
-          );
-        })
+          )}
+        </>
       )}
+
+      {tour && <Tutorial onClose={() => setTour(false)} T={T} />}
+
       {flagged.length > 0 && (
         <div className="card" style={{ padding: 20 }}>
           <div className="serif" style={{ fontSize: 16, fontWeight: 600, marginBottom: 10 }}>Bookmarked for revision</div>
@@ -943,7 +1029,7 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
   );
 }
 
-function QueueCard({ s, prio, now, onRetire, onKeep, T }) {
+function QueueCard({ s, prio, dueIn, tourAnchor, now, onRetire, onKeep, T }) {
   const [img, setImg] = useState(null);
   const [lightbox, setLightbox] = useState(null);
   const [ansImg, setAnsImg] = useState(null);
@@ -951,26 +1037,26 @@ function QueueCard({ s, prio, now, onRetire, onKeep, T }) {
   useEffect(() => { if (s.hasPhoto) fetchPhotoUrl(s.id).then(setImg); return () => img && URL.revokeObjectURL(img); }, [s.id, s.hasPhoto]);
   useEffect(() => { if (reveal && s.hasAnsPhoto && !ansImg) fetchPhotoUrl(`${s.id}-ans`).then(setAnsImg); }, [reveal]);
   const hasAnswer = s.answerText || s.hasAnsPhoto;
-  const age = daysBetween(s.lastTried || s.date, now);
-  const stale = age >= 14;
+  const overdue = typeof dueIn === "number" && dueIn < 0 ? Math.abs(dueIn) : 0;
+  const stale = overdue >= 7;
 
   return (
-    <div className="card" style={{ padding: 16, border: `1px solid ${stale ? T.accent2 + "80" : T.line}` }}>
+    <div className="card" {...(tourAnchor ? { "data-tour": "card" } : {})} style={{ padding: 16, border: `1px solid ${stale ? T.accent2 + "80" : T.line}` }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, marginBottom: 6 }}>
         <div style={{ fontSize: 10, fontWeight: 700, color: T.accent, letterSpacing: "0.08em" }}>{prio ? <span style={{ color: T.gold }}>{"★".repeat(prio)} </span> : null}{topicName(s.topicId).toUpperCase()} · filed {s.date}{s.keepCount > 0 ? ` · kept ${s.keepCount}×` : ""}</div>
-        {stale && <span style={{ fontSize: 9.5, fontWeight: 700, color: T.gold, letterSpacing: "0.08em", background: T.card2, border: `1px solid ${T.line}`, borderRadius: 99, padding: "3px 9px", flexShrink: 0 }}>UNTOUCHED {age}D</span>}
+        {overdue > 0 && <span style={{ fontSize: 9.5, fontWeight: 700, color: stale ? T.accent2 : T.gold, letterSpacing: "0.08em", background: T.card2, border: `1px solid ${T.line}`, borderRadius: 99, padding: "3px 9px", flexShrink: 0 }}>{overdue}D OVERDUE</span>}
       </div>
       {s.text && <div style={{ fontSize: 13.5, lineHeight: 1.45, color: T.ink }}>{s.text}</div>}
       {img && (
         <button onClick={() => setLightbox({ src: img, caption: `${topicName(s.topicId)} · filed ${s.date}` })}
           style={{ display: "block", padding: 0, marginTop: 8, border: "none", background: "none", position: "relative", width: "100%", textAlign: "left" }}>
           <img src={img} alt="question" style={{ borderRadius: 10, maxHeight: 220, maxWidth: "100%", border: `1px solid ${T.line}`, display: "block" }} />
-          <span style={{ position: "absolute", bottom: 8, right: 8, background: "rgba(8,6,4,.78)", border: `1px solid ${T.line}`, borderRadius: 99, padding: "4px 10px", fontSize: 10, fontWeight: 700, color: T.accent }}>tap to enlarge</span>
+          <span style={{ position: "absolute", bottom: 8, right: 8, background: T.light ? "rgba(50,40,42,.72)" : "rgba(8,6,4,.78)", border: `1px solid ${T.line}`, borderRadius: 99, padding: "4px 10px", fontSize: 10, fontWeight: 700, color: T.accent }}>tap to enlarge</span>
         </button>
       )}
       <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-        <button onClick={onRetire} style={{ background: `linear-gradient(90deg, ${T.accent}, ${T.accent2})`, border: "none", borderRadius: 99, padding: "8px 15px", fontSize: 11.5, fontWeight: 700, color: T.onAccent }}>Got it — clear</button>
-        <button onClick={onKeep} style={{ background: T.card2, border: `1px solid ${T.line}`, borderRadius: 99, padding: "8px 15px", fontSize: 11.5, fontWeight: 700, color: T.accent }}>Still shaky — keep</button>
+        <button onClick={onRetire} {...(tourAnchor ? { "data-tour": "clear" } : {})} style={{ background: `linear-gradient(90deg, ${T.accent}, ${T.accent2})`, border: "none", borderRadius: 99, padding: "8px 15px", fontSize: 11.5, fontWeight: 700, color: T.onAccent }}>Got it — clear</button>
+        <button onClick={onKeep} {...(tourAnchor ? { "data-tour": "keep" } : {})} style={{ background: T.card2, border: `1px solid ${T.line}`, borderRadius: 99, padding: "8px 15px", fontSize: 11.5, fontWeight: 700, color: T.accent }}>Still shaky — again in 2d</button>
         {hasAnswer && !reveal && <button onClick={() => setReveal(true)} style={{ background: T.card2, border: `1px solid ${T.line}`, borderRadius: 99, padding: "8px 15px", fontSize: 11.5, fontWeight: 600, color: T.mut }}>Reveal answer</button>}
       </div>
       {reveal && (
@@ -1207,7 +1293,7 @@ function Lightbox({ src, caption, onClose, T }) {
   }, []);
   return (
     <div onClick={onClose} style={{
-      position: "fixed", inset: 0, zIndex: 80, background: "rgba(6,5,4,0.94)",
+      position: "fixed", inset: 0, zIndex: 80, background: T.light ? "rgba(40,32,34,0.92)" : "rgba(6,5,4,0.94)",
       display: "flex", flexDirection: "column", overscrollBehavior: "contain",
     }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", flexShrink: 0 }}>
@@ -1256,7 +1342,7 @@ function ClusterCelebration({ data, onDone, T }) {
   return (
     <button onClick={onDone} aria-label="dismiss" style={{
       position: "fixed", inset: 0, zIndex: 50, border: "none", cursor: "pointer",
-      background: "rgba(8,6,4,0.6)", backdropFilter: "blur(2px)",
+      background: T.light ? "rgba(60,45,50,0.36)" : "rgba(8,6,4,0.6)", backdropFilter: "blur(2px)",
       display: "grid", placeItems: "center", padding: 20,
     }}>
       <style>{`
@@ -1658,25 +1744,40 @@ function BankView({ bank, stars, onStar, onUnstar, onClose, T }) {
                       <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: "0.08em", color: T.dim }}>
                         {i + 1}. {q.type ? q.type.toUpperCase() : ""}
                       </div>
-                      <div style={{ position: "relative", flexShrink: 0 }}>
-                        <button onClick={() => setStarPicker(starPicker === q.id ? null : q.id)}
-                          style={{ background: "none", border: "none", fontSize: 13, fontWeight: 700, color: starred ? T.gold : T.dim, padding: 0, letterSpacing: 1 }}>
-                          {starred ? "★".repeat(starred) : "☆ revise"}
-                        </button>
+                      <div style={{ position: "relative", flexShrink: 0, display: "flex", alignItems: "center", gap: 6 }}>
+                        {starred ? (
+                          <>
+                            {/* tap the stars to change grade, ✕ to clear outright */}
+                            <button onClick={() => setStarPicker(starPicker === q.id ? null : q.id)}
+                              style={{ background: T.card2, border: `1px solid ${T.gold}55`, borderRadius: 99, padding: "5px 10px", fontSize: 12, fontWeight: 700, color: T.gold, letterSpacing: 1 }}>
+                              {"★".repeat(starred)}
+                            </button>
+                            <button onClick={() => onUnstar(q)} aria-label="remove from revision"
+                              style={{ background: "transparent", border: `1px solid ${T.line}`, borderRadius: 99, width: 26, height: 26, fontSize: 14, lineHeight: 1, color: T.mut, display: "grid", placeItems: "center", padding: 0 }}>
+                              ×
+                            </button>
+                          </>
+                        ) : (
+                          <button onClick={() => setStarPicker(starPicker === q.id ? null : q.id)}
+                            style={{ background: "none", border: `1px solid ${T.line}`, borderRadius: 99, padding: "5px 11px", fontSize: 11.5, fontWeight: 700, color: T.dim }}>
+                            ☆ revise
+                          </button>
+                        )}
                         {starPicker === q.id && (
-                          <div className="card" style={{ position: "absolute", right: 0, top: 22, zIndex: 5, padding: 6, display: "flex", gap: 4, whiteSpace: "nowrap" }}>
-                            {[1, 2, 3].map((p) => (
+                          <div className="card" style={{ position: "absolute", right: 0, top: 30, zIndex: 5, padding: 7, display: "flex", flexDirection: "column", gap: 5, whiteSpace: "nowrap", minWidth: 152 }}>
+                            {[[3, "★★★", "revisit first · 2d"], [2, "★★", "soon · 4d"], [1, "★", "eventually · 7d"]].map(([p, stars2, hint]) => (
                               <button key={p} onClick={() => { onStar(q, p); setStarPicker(null); }}
-                                style={{ background: starred === p ? T.card2 : "transparent", border: `1px solid ${T.line}`, borderRadius: 8, padding: "6px 9px", fontSize: 12, color: T.gold, fontWeight: 700 }}>
-                                {"★".repeat(p)}
+                                style={{ background: starred === p ? T.card2 : "transparent", border: `1px solid ${starred === p ? T.gold + "66" : T.line}`, borderRadius: 9, padding: "7px 10px", fontSize: 12, color: T.gold, fontWeight: 700, textAlign: "left", display: "flex", justifyContent: "space-between", gap: 10 }}>
+                                <span>{stars2}</span><span style={{ color: T.dim, fontWeight: 600, fontSize: 10 }}>{hint}</span>
                               </button>
                             ))}
-                            {starred && (
+                            {starred ? (
                               <button onClick={() => { onUnstar(q); setStarPicker(null); }}
-                                style={{ background: "transparent", border: `1px solid ${T.line}`, borderRadius: 8, padding: "6px 9px", fontSize: 11, color: T.dim, fontWeight: 700 }}>
-                                remove
+                                style={{ background: "transparent", border: `1px solid ${T.line}`, borderRadius: 9, padding: "7px 10px", fontSize: 11, color: T.mut, fontWeight: 700 }}>
+                                Remove from revision
                               </button>
-                            )}
+                            ) : null}
+                            <button onClick={() => setStarPicker(null)} style={{ background: "none", border: "none", fontSize: 10.5, color: T.dim, padding: "2px 0 0" }}>cancel</button>
                           </div>
                         )}
                       </div>
@@ -1766,5 +1867,109 @@ function BankAdminCard({ T }) {
       </div>
       <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }} onChange={upload} />
     </details>
+  );
+}
+
+/* ================================================================
+   TUTORIAL — spotlight coach marks. Available three times, then gone.
+   ================================================================ */
+const TUTORIAL_KEY = "catlog_tutorial_views";
+const tutorialViews = () => Number(localStorage.getItem(TUTORIAL_KEY) || 0);
+
+const TOUR = [
+  { sel: '[data-tour="due"]', title: "Start here",
+    body: "These are the questions due today. They appear when enough time has passed for forgetting to be a real test — not the day after you filed them." },
+  { sel: '[data-tour="card"]', title: "Work one, then judge it",
+    body: "Solve it on paper first. The stars show how hard you found it, and any overdue days show here too." },
+  { sel: '[data-tour="clear"]', title: "Got it",
+    body: "Tap this when you solved it comfortably. It leaves the queue for good." },
+  { sel: '[data-tour="keep"]', title: "Didn't get it",
+    body: "Tap this instead and it returns in two days, marked as hardest so it sits at the top next time. Keep missing it and it comes back again — that's intended." },
+  { sel: '[data-tour="upcoming"]', title: "Coming up",
+    body: "Everything scheduled for later sits in here, quietly. Open it any time and tap Review now to pull something forward." },
+  { sel: '[data-tour="export"]', title: "Take it off-screen",
+    body: "Exports what's due as a PDF with working space under each question — useful for a proper sit-down revision session away from the iPad." },
+];
+
+function Tutorial({ onClose, T }) {
+  const [i, setI] = useState(0);
+  const [rect, setRect] = useState(null);
+  const steps = TOUR.filter((s) => document.querySelector(s.sel));
+
+  useEffect(() => {
+    if (!steps.length) return;
+    const el = document.querySelector(steps[i].sel);
+    if (!el) { setRect(null); return; }
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    const measure = () => {
+      const r = el.getBoundingClientRect();
+      setRect({ top: r.top, left: r.left, width: r.width, height: r.height });
+    };
+    const t = setTimeout(measure, 320);
+    window.addEventListener("resize", measure);
+    return () => { clearTimeout(t); window.removeEventListener("resize", measure); };
+  }, [i, steps.length]);
+
+  useEffect(() => { document.body.style.overflow = "hidden"; return () => { document.body.style.overflow = ""; }; }, []);
+
+  if (!steps.length) {
+    return (
+      <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 90, background: "rgba(20,15,14,.86)", display: "grid", placeItems: "center", padding: 24 }}>
+        <div className="card" style={{ padding: 24, maxWidth: 320, textAlign: "center" }}>
+          <div className="serif" style={{ fontSize: 18, fontWeight: 600, color: T.ink }}>Nothing to point at yet</div>
+          <div style={{ fontSize: 13, color: T.mut, marginTop: 8, lineHeight: 1.55 }}>Star a question in a Question Bank first, then come back — the walkthrough highlights real things on this screen.</div>
+          <button onClick={onClose} style={{ marginTop: 16, background: `linear-gradient(90deg, ${T.accent}, ${T.accent2})`, border: "none", borderRadius: 11, padding: "10px 20px", fontSize: 12.5, fontWeight: 700, color: T.onAccent }}>Close</button>
+        </div>
+      </div>
+    );
+  }
+
+  const pad = 8;
+  const step = steps[i];
+  const below = rect ? rect.top < window.innerHeight * 0.5 : true;
+  const tipTop = rect ? (below ? rect.top + rect.height + pad + 14 : Math.max(16, rect.top - pad - 190)) : 120;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 90 }}>
+      {/* dim everything except the highlighted element */}
+      {rect ? (
+        <div style={{
+          position: "fixed", top: rect.top - pad, left: rect.left - pad,
+          width: rect.width + pad * 2, height: rect.height + pad * 2,
+          borderRadius: 14, boxShadow: "0 0 0 9999px rgba(16,12,12,.82)",
+          border: `2px solid ${T.accent}`, pointerEvents: "none", transition: "all .28s ease",
+        }} />
+      ) : <div style={{ position: "fixed", inset: 0, background: "rgba(16,12,12,.82)" }} />}
+
+      {/* arrow */}
+      {rect && (
+        <svg width="26" height="26" viewBox="0 0 26 26" style={{
+          position: "fixed", left: Math.min(window.innerWidth - 44, rect.left + rect.width / 2 - 13),
+          top: below ? rect.top + rect.height + pad - 2 : rect.top - pad - 24,
+          transform: below ? "none" : "rotate(180deg)", transition: "all .28s ease", pointerEvents: "none",
+        }}>
+          <path d="M13 24 L4 8 H22 Z" fill={T.accent} />
+        </svg>
+      )}
+
+      <div className="card" style={{
+        position: "fixed", left: 16, right: 16, top: tipTop, maxWidth: 380, margin: "0 auto",
+        padding: "18px 20px", border: `1px solid ${T.accent}55`, transition: "top .28s ease",
+      }}>
+        <div style={{ fontSize: 9.5, letterSpacing: "0.16em", color: T.dim, fontWeight: 700 }}>STEP {i + 1} OF {steps.length}</div>
+        <div className="serif" style={{ fontSize: 18, fontWeight: 600, color: T.ink, margin: "6px 0 6px" }}>{step.title}</div>
+        <div style={{ fontSize: 13, color: T.mut, lineHeight: 1.6 }}>{step.body}</div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 16, gap: 10 }}>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 11.5, color: T.dim, fontWeight: 600, padding: 0 }}>Skip</button>
+          <div style={{ display: "flex", gap: 8 }}>
+            {i > 0 && <button onClick={() => setI(i - 1)} style={{ background: T.card2, border: `1px solid ${T.line}`, borderRadius: 10, padding: "9px 14px", fontSize: 12, fontWeight: 700, color: T.mut }}>Back</button>}
+            <button onClick={() => (i === steps.length - 1 ? onClose() : setI(i + 1))}
+              style={{ background: `linear-gradient(90deg, ${T.accent}, ${T.accent2})`, border: "none", borderRadius: 10, padding: "9px 18px", fontSize: 12, fontWeight: 700, color: T.onAccent }}>
+              {i === steps.length - 1 ? "Done" : "Next"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
