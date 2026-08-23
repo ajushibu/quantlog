@@ -119,8 +119,25 @@ const FIRST_GAP = { 3: 2, 2: 4, 1: 7, 0: 4 };   // priority -> days
 const LAPSE_GAPS = [2, 3, 5];                    // successive "still shaky" gaps
 const addDays = (ds, n) => { const d = new Date(ds + "T00:00:00"); d.setDate(d.getDate() + n); return dayKey(d); };
 const schedOf = (state, s) => (state.sched || {})[s.id] || null;
+
+/* The raw gap says "ready to be tested again". Her revision days say "when
+   revision actually happens". A question ready on Wednesday when she only
+   revises Sundays isn't overdue — it just waits for Sunday. So the shown due
+   date is the first revision day on or after the raw date. Because this is
+   computed rather than stored, changing revision days re-schedules
+   everything instantly with no migration. */
+function snapToRevisionDay(ds, revisionDays) {
+  if (!revisionDays || !revisionDays.length || revisionDays.length >= 7) return ds;
+  const d = new Date(ds + "T00:00:00");
+  for (let i = 0; i < 7; i++) {
+    if (revisionDays.includes(d.getDay())) return dayKey(d);
+    d.setDate(d.getDate() + 1);
+  }
+  return ds;
+}
+const rawDue = (state, s) => schedOf(state, s)?.due || s.date;
 /* legacy items (filed before scheduling existed) are simply due now */
-const dueDate = (state, s) => schedOf(state, s)?.due || s.date;
+const dueDate = (state, s) => snapToRevisionDay(rawDue(state, s), state.settings?.revisionDays);
 const isDue = (state, s, today) => dueDate(state, s) <= today;
 const prioOfItem = (state, s) => schedOf(state, s)?.p || (s.id.startsWith("qb-") ? (state.qbStars?.[s.id.slice(3)] || 0) : 0);
 const daysUntil = (ds, today) => Math.round((new Date(ds + "T00:00:00") - new Date(today + "T00:00:00")) / 864e5);
@@ -447,7 +464,9 @@ function GlobalStyle({ T }) {
       .completed-pop { animation: emberIn .4s ease; }
       @media (prefers-reduced-motion: reduce){ .completed-pop{animation:none} }
       ::-webkit-scrollbar{width:8px} ::-webkit-scrollbar-thumb{background:${T.line};border-radius:99px}
-      body { background:${T.bgGrad}; }
+      html, body { background:${T.bgGrad}; max-width: 100%; overflow-x: hidden; }
+      /* long unbroken strings (question text, sources) must wrap, never widen the page */
+      * { min-width: 0; overflow-wrap: anywhere; }
       /* installed-PWA safe areas (notch / home indicator) */
       header { padding-top: calc(34px + env(safe-area-inset-top)) !important; }
       main { padding-bottom: calc(90px + env(safe-area-inset-bottom)) !important; }
@@ -920,9 +939,9 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
   return (
     <>
       <div className="card" style={{ padding: 20 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
-          <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
               <span className="serif" style={{ fontSize: 18, fontWeight: 600 }}>Revision queue</span>
               {tourLeft > 0 && (
                 <button onClick={startTour} style={{ background: T.card2, border: `1px solid ${T.line}`, borderRadius: 99, padding: "4px 11px", fontSize: 10.5, fontWeight: 700, color: T.accent }}>
@@ -932,11 +951,18 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
             </div>
             <div style={{ fontSize: 12, color: T.mut, marginTop: 3 }}>{due.length} due now · {upcoming.length} scheduled · {flagged.length} bookmarked</div>
           </div>
-          <select data-tour="export" value={exportScope} onChange={(e) => setExportScope(e.target.value)} style={{ background: T.field, border: `1px solid ${T.line}`, borderRadius: 11, padding: "8px 8px", fontSize: 11.5, color: T.mut, outline: "none", maxWidth: 130 }}>
+        </div>
+
+        <div style={{ display: "flex", gap: 8, marginTop: 13, alignItems: "stretch" }}>
+          <select data-tour="export" value={exportScope} onChange={(e) => setExportScope(e.target.value)}
+            style={{ flex: 1, minWidth: 0, background: T.field, border: `1px solid ${T.line}`, borderRadius: 11, padding: "9px 10px", fontSize: 11.5, color: T.mut, outline: "none" }}>
             <option value="due">Due now ({due.length})</option>
             <option value="all">Everything active ({bySection.length})</option>
           </select>
-          <button onClick={doExport} disabled={exporting || (filtered.length === 0 && flagged.length === 0)} style={{ display: "flex", alignItems: "center", gap: 7, background: `linear-gradient(90deg, ${T.accent}, ${T.accent2})`, border: "none", borderRadius: 11, padding: "9px 15px", fontSize: 11.5, fontWeight: 700, color: T.onAccent, opacity: exporting || (filtered.length === 0 && flagged.length === 0) ? 0.4 : 1, boxShadow: `0 0 16px ${T.accent}44`, flexShrink: 0 }}>{Icon.download(T.onAccent)} {exporting ? "Building PDF" : "Export PDF"}</button>
+          <button onClick={doExport} disabled={exporting || (filtered.length === 0 && flagged.length === 0)}
+            style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, flexShrink: 0, background: `linear-gradient(90deg, ${T.accent}, ${T.accent2})`, border: "none", borderRadius: 11, padding: "9px 16px", fontSize: 11.5, fontWeight: 700, color: T.onAccent, opacity: exporting || (filtered.length === 0 && flagged.length === 0) ? 0.4 : 1, boxShadow: `0 0 16px ${T.accent}44`, whiteSpace: "nowrap" }}>
+            {Icon.download(T.onAccent)} {exporting ? "Building" : "Export PDF"}
+          </button>
         </div>
         {exportErr && <div style={{ fontSize: 11.5, color: T.accent2, fontWeight: 600, marginTop: 10 }}>{exportErr}</div>}
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 14 }}>
@@ -960,7 +986,11 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
             <div className="card" style={{ padding: 22, textAlign: "center" }}>
               <div className="serif" style={{ fontSize: 17, fontWeight: 600, color: T.gold }}>Nothing due today</div>
               <div style={{ fontSize: 12.5, color: T.mut, marginTop: 5, lineHeight: 1.5 }}>
-                {upcoming.length ? `${upcoming.length} question${upcoming.length === 1 ? "" : "s"} waiting — the nearest comes back in ${Math.max(0, daysUntil(dueDate(state, upcoming[0]), today))} day${daysUntil(dueDate(state, upcoming[0]), today) === 1 ? "" : "s"}.` : "The queue is clear."}
+                {upcoming.length ? (() => {
+                  const nd = dueDate(state, upcoming[0]);
+                  const n = Math.max(0, daysUntil(nd, today));
+                  return `${upcoming.length} question${upcoming.length === 1 ? "" : "s"} waiting — the next comes back ${n <= 7 ? `on ${DAY_NAMES[new Date(nd + "T00:00:00").getDay()]}day` : `in ${n} days`}.`;
+                })() : "The queue is clear."}
               </div>
             </div>
           )}
@@ -973,7 +1003,9 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
               </summary>
               <div style={{ padding: "0 14px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
                 {upcoming.map((s) => {
-                  const d = daysUntil(dueDate(state, s), today);
+                  const dd = dueDate(state, s);
+                  const d = daysUntil(dd, today);
+                  const dayName = DAY_NAMES[new Date(dd + "T00:00:00").getDay()];
                   return (
                     <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 10, background: T.card2, border: `1px solid ${T.line}`, borderRadius: 12, padding: "11px 13px" }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
@@ -982,7 +1014,7 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
                         </div>
                         <div style={{ fontSize: 12.5, color: T.mut, marginTop: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.text || "photo question"}</div>
                       </div>
-                      <span style={{ fontSize: 10.5, color: T.dim, flexShrink: 0 }}>in {d}d</span>
+                      <span style={{ fontSize: 10.5, color: T.dim, flexShrink: 0, textAlign: "right" }}>{d <= 7 ? dayName : `in ${d}d`}<br /><span style={{ fontSize: 9 }}>in {d}d</span></span>
                       <button onClick={() => reviewEarly(s.id)} style={{ background: "transparent", border: `1px solid ${T.line}`, borderRadius: 99, padding: "6px 11px", fontSize: 10.5, fontWeight: 700, color: T.accent, flexShrink: 0 }}>Review now</button>
                     </div>
                   );
@@ -1185,7 +1217,7 @@ function Dashboard({ state, persist, struggles, now, T }) {
 
       <div className="card" style={{ padding: 20 }}>
         <div className="serif" style={{ fontSize: 18, fontWeight: 600, marginBottom: 2 }}>Revision days</div>
-        <div style={{ fontSize: 12, color: T.mut, marginBottom: 12 }}>Pick one or two days. The Study view nudges toward the Revision tab on these days.</div>
+        <div style={{ fontSize: 12, color: T.mut, marginBottom: 12, lineHeight: 1.55 }}>Pick one or two days. Questions become due on these days only — with one day a week everything lands together; with two, the queue spreads out and each question comes back closer to when it was actually ready.</div>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           {DAY_NAMES.map((d, i) => {
             const on = state.settings.revisionDays.includes(i);
@@ -1476,7 +1508,7 @@ function MockForm({ onSave, now, T }) {
 
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 4px 8px" }}>
         <div style={{ flex: 1, fontSize: 9, letterSpacing: "0.1em", color: T.dim, fontWeight: 700 }}>SECTION</div>
-        {["ATTEMPTED", "CORRECT", "SCORE"].map((h) => <div key={h} style={{ width: 74, textAlign: "center", fontSize: 9, letterSpacing: "0.08em", color: T.dim, fontWeight: 700 }}>{h}</div>)}
+        {["ATTEMPTED", "CORRECT", "SCORE"].map((h) => <div key={h} style={{ width: 68, flexShrink: 0, textAlign: "center", fontSize: 8.5, letterSpacing: "0.06em", color: T.dim, fontWeight: 700 }}>{h}</div>)}
       </div>
 
       {MOCK_SECTIONS.map((s) => {
@@ -1485,13 +1517,13 @@ function MockForm({ onSave, now, T }) {
         const bad = c > a || a > s.qs;
         return (
           <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-            <div style={{ flex: 1 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 13.5, fontWeight: 600 }}>{s.name}</div>
               <div style={{ fontSize: 10.5, color: T.dim }}>{s.qs} questions</div>
             </div>
-            <input value={r.attempted} onChange={(e) => setCell(s.id, "attempted", e.target.value)} placeholder="0" inputMode="numeric" style={{ ...cell, width: 74, borderColor: a > s.qs ? T.accent2 : T.line }} />
-            <input value={r.correct} onChange={(e) => setCell(s.id, "correct", e.target.value)} placeholder="0" inputMode="numeric" style={{ ...cell, width: 74, borderColor: bad ? T.accent2 : T.line }} />
-            <div style={{ width: 74, textAlign: "center", fontSize: 14, fontWeight: 700, color: bad ? T.accent2 : T.accent }}>
+            <input value={r.attempted} onChange={(e) => setCell(s.id, "attempted", e.target.value)} placeholder="0" inputMode="numeric" style={{ ...cell, width: 68, flexShrink: 0, borderColor: a > s.qs ? T.accent2 : T.line }} />
+            <input value={r.correct} onChange={(e) => setCell(s.id, "correct", e.target.value)} placeholder="0" inputMode="numeric" style={{ ...cell, width: 68, flexShrink: 0, borderColor: bad ? T.accent2 : T.line }} />
+            <div style={{ width: 68, flexShrink: 0, textAlign: "center", fontSize: 14, fontWeight: 700, color: bad ? T.accent2 : T.accent }}>
               {bad ? "—" : secScore({ attempted: a, correct: c })}
             </div>
           </div>
