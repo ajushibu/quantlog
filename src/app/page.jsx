@@ -595,8 +595,8 @@ function Study({ state, persist, struggles, setStruggles, now, T }) {
     const sid = `qb-${q.id}`;
     // clear the star AND its schedule locally first, so the UI updates even
     // if the network call fails
-    const nextStars = { ...state.qbStars }; delete nextStars[q.id];
-    const nextSched = { ...(state.sched || {}) }; delete nextSched[sid];
+    const nextStars = { ...state.qbStars, [q.id]: 0 };        // tombstone, not delete
+    const nextSched = { ...(state.sched || {}), [sid]: null };
     let next = stampItem({ ...state, qbStars: nextStars, sched: nextSched }, "qbStars", q.id);
     next = stampItem(next, "sched", sid);
     persist(next);
@@ -904,12 +904,10 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
   };
   const retire = (id) => {
     update(id, { retired: true, lastTried: today });
-    const nextSched = { ...state.sched }; delete nextSched[id];
-    persist(stampItem({ ...state, sched: nextSched }, "sched", id));
+    persist(stampItem({ ...state, sched: { ...state.sched, [id]: null } }, "sched", id));
     if (id.startsWith("qb-")) {
       const qid = id.slice(3);
-      const nextStars = { ...state.qbStars }; delete nextStars[qid];
-      persist(stampItem({ ...state, qbStars: nextStars }, "qbStars", qid));
+      persist(stampItem({ ...state, qbStars: { ...state.qbStars, [qid]: 0 } }, "qbStars", qid));
     }
   };
   const keep = (id) => {
@@ -1246,14 +1244,15 @@ function ResetCard({ state, persist, T }) {
   }).length;
 
   const resetCelebrations = () => {
-    let next = { ...state, celebrated: {} };
+    let next = { ...state, celebrated: Object.fromEntries(Object.keys(state.celebrated || {}).map((id) => [id, false])) };
     Object.keys(state.celebrated || {}).forEach((id) => { next = stampItem(next, "celebrated", id); });
     persist(next);
     setConfirming(null);
   };
 
   const resetAll = () => {
-    let next = { ...state, items: {}, flags: {}, celebrated: {}, log: [] };
+    const blank = (obj, v) => Object.fromEntries(Object.keys(obj || {}).map((k) => [k, v]));
+    let next = { ...state, items: blank(state.items, {}), flags: blank(state.flags, false), celebrated: blank(state.celebrated, false), log: [] };
     Object.keys(state.items || {}).forEach((id) => { next = stampItem(next, "items", id); });
     Object.keys(state.flags || {}).forEach((id) => { next = stampItem(next, "flags", id); });
     Object.keys(state.celebrated || {}).forEach((id) => { next = stampItem(next, "celebrated", id); });

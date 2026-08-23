@@ -7,6 +7,11 @@ import { checkCode, unauthorized } from "@/lib/auth";
    for each item/flag, the newer timestamp wins. Nothing is lost unless the
    SAME item changed on both devices, where the later change rightly wins. */
 
+/* NOTE: a key that is simply deleted locally cannot be merged — it is absent
+   from `local`, so the remote value survives and the change appears to undo
+   itself on the next sync. Clearing therefore writes a tombstone (0 / null)
+   with a fresh timestamp instead of deleting, and readers treat falsy as
+   "not set". */
 function mergeStamped(remote = {}, local = {}, remoteMeta = {}, localMeta = {}) {
   const out = { ...remote };
   const meta = { ...remoteMeta };
