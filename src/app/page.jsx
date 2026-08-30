@@ -24,6 +24,7 @@ const Icon = {
   camera: (c, s = 14) => (<svg width={s} height={s} viewBox="0 0 16 16" fill="none"><rect x="1.5" y="4" width="13" height="9.5" rx="2" stroke={c} strokeWidth="1.4" /><circle cx="8" cy="8.7" r="2.6" stroke={c} strokeWidth="1.4" /><path d="M5.5 4L6.5 2.5h3L10.5 4" stroke={c} strokeWidth="1.4" strokeLinecap="round" /></svg>),
   chevron: (open, c, s = 12) => (<svg width={s} height={s} viewBox="0 0 16 16" fill="none" style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .2s" }}><path d="M3.5 6L8 10.5L12.5 6" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>),
   download: (c, s = 13) => (<svg width={s} height={s} viewBox="0 0 16 16" fill="none"><path d="M8 2v8m0 0L5 7m3 3l3-3M3 13.5h10" stroke={c} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>),
+  note: (c, s = 13) => (<svg width={s} height={s} viewBox="0 0 16 16" fill="none"><path d="M3.5 2.5h9v11h-9z" stroke={c} strokeWidth="1.4" strokeLinejoin="round" /><path d="M5.5 6h5M5.5 8.5h5M5.5 11h3" stroke={c} strokeWidth="1.3" strokeLinecap="round" /></svg>),
   book: (c, s = 12) => (<svg width={s} height={s} viewBox="0 0 16 16" fill="none"><path d="M2.5 3.5A1.5 1.5 0 014 2h9.5v11H4a1.5 1.5 0 00-1.5 1.5v-11z" stroke={c} strokeWidth="1.4" strokeLinejoin="round" /><path d="M2.5 14.5A1.5 1.5 0 014 13h9.5" stroke={c} strokeWidth="1.4" /></svg>),
   palette: (c, s = 15) => (<svg width={s} height={s} viewBox="0 0 16 16" fill="none"><path d="M8 1.5A6.5 6.5 0 108 14.5c1 0 1.4-.6 1.4-1.2 0-.5-.3-.8-.3-1.2 0-.6.5-1 1.1-1H11a3.5 3.5 0 003.5-3.5C14.5 4 11.6 1.5 8 1.5z" stroke={c} strokeWidth="1.3" strokeLinejoin="round" /><circle cx="5" cy="7" r=".9" fill={c} /><circle cx="7.2" cy="4.6" r=".9" fill={c} /><circle cx="10.2" cy="5.2" r=".9" fill={c} /></svg>),
 };
@@ -142,8 +143,59 @@ const isDue = (state, s, today) => dueDate(state, s) <= today;
 const prioOfItem = (state, s) => schedOf(state, s)?.p || (s.id.startsWith("qb-") ? (state.qbStars?.[s.id.slice(3)] || 0) : 0);
 const daysUntil = (ds, today) => Math.round((new Date(ds + "T00:00:00") - new Date(today + "T00:00:00")) / 864e5);
 
+
+/* ---------------- Shared habits ----------------
+   Two people, two lists. The streak advances only on days where BOTH have
+   ticked all of their CORE habits — bonus habits never break it. The day
+   closes at 4am, not midnight, so a late tick still counts, and up to two
+   missed days per calendar month are absorbed automatically as freezes.
+   The streak is derived from the log rather than stored, so it can never
+   drift apart between devices. */
+const PEOPLE = [{ id: "aju", name: "Aju" }, { id: "aish", name: "Aiswarya" }];
+const FREEZES_PER_MONTH = 2;
+const HABIT_MILESTONES = [7, 21, 50, 100, 200];
+
+function habitDayKey(now) {
+  const d = new Date(now);
+  if (d.getHours() < 4) d.setDate(d.getDate() - 1);
+  return dayKey(d);
+}
+const prevDay = (ds) => { const d = new Date(ds + "T00:00:00"); d.setDate(d.getDate() - 1); return dayKey(d); };
+const coreHabits = (state, pid) => (state.habits?.[pid] || []).filter((h) => h.core !== false);
+function personComplete(state, pid, ds) {
+  const core = coreHabits(state, pid);
+  if (!core.length) return false;
+  const ticks = state.habitLog?.[ds]?.[pid] || [];
+  return core.every((h) => ticks.includes(h.id));
+}
+const dayComplete = (state, ds) => PEOPLE.every((p) => personComplete(state, p.id, ds));
+
+function habitStreak(state, todayKey) {
+  let n = 0, cur = todayKey;
+  const used = {};
+  if (!dayComplete(state, cur)) cur = prevDay(cur);
+  for (let guard = 0; guard < 800; guard++) {
+    if (dayComplete(state, cur)) { n++; cur = prevDay(cur); continue; }
+    const m = cur.slice(0, 7);
+    if ((used[m] || 0) < FREEZES_PER_MONTH && n > 0) { used[m] = (used[m] || 0) + 1; cur = prevDay(cur); continue; }
+    break;
+  }
+  return { days: n, freezesUsed: used };
+}
+function bestHabitStreak(state) {
+  const days = Object.keys(state.habitLog || {}).sort();
+  if (!days.length) return 0;
+  let best = 0, run = 0, cur = days[0];
+  const last = days[days.length - 1];
+  for (let guard = 0; guard < 1200 && cur <= last; guard++) {
+    if (dayComplete(state, cur)) { run++; best = Math.max(best, run); } else run = 0;
+    cur = dayKey(new Date(new Date(cur + "T00:00:00").getTime() + 864e5));
+  }
+  return best;
+}
+
 function defaultState() {
-  return { settings: { revisionDays: [0] }, items: {}, flags: {}, celebrated: {}, qbStars: {}, sched: {}, mocks: [], log: [], digest: "", digestDate: "", meta: {} };
+  return { settings: { revisionDays: [0] }, items: {}, flags: {}, celebrated: {}, qbStars: {}, sched: {}, notes: {}, habits: {}, habitLog: {}, mocks: [], log: [], digest: "", digestDate: "", meta: {} };
 }
 
 const itemDone = (st, it) => { const v = st.items[it.id] || {}; return it.kind === "s" ? !!(v.qb || (v.l1 && v.l2)) : !!v.v; };
@@ -203,7 +255,7 @@ function pdfSafe(t) {
     .replace(/[ \t]{2,}/g, " ");
 }
 
-async function exportRevisionDoc(queue, flagged) {
+async function exportRevisionDoc(queue, flagged, notes) {
   const { jsPDF } = await import("jspdf");
   const doc = new jsPDF({ unit: "pt", format: "a4" });
   const PW = doc.internal.pageSize.getWidth();
@@ -231,9 +283,25 @@ async function exportRevisionDoc(queue, flagged) {
     doc.setDrawColor(230, 230, 230); doc.line(M, y - 8, PW - M, y - 8);
   }
 
+  const notesPrinted = new Set();
   for (let i = 0; i < queue.length; i++) {
     const q = queue[i];
     need(90);
+
+    // her own method notes for this topic, printed once per topic
+    const note = (notes || {})[q.topicId];
+    if (note && !notesPrinted.has(q.topicId)) {
+      notesPrinted.add(q.topicId);
+      const nl = doc.splitTextToSize(pdfSafe(note), CW - 22);
+      need(nl.length * 12 + 34);
+      doc.setFillColor(248, 246, 242); doc.setDrawColor(226, 222, 214);
+      doc.roundedRect(M, y - 4, CW, nl.length * 12 + 26, 5, 5, "FD");
+      doc.setFont("helvetica", "bold"); doc.setFontSize(8); doc.setTextColor(150, 110, 40);
+      doc.text(pdfSafe(`${topicName(q.topicId)} - YOUR NOTES`).toUpperCase(), M + 11, y + 9);
+      doc.setFont("times", "normal"); doc.setFontSize(10.5); doc.setTextColor(60, 60, 60);
+      doc.text(nl, M + 11, y + 22);
+      y += nl.length * 12 + 34;
+    }
 
     // question label
     doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.setTextColor(150, 90, 20);
@@ -582,6 +650,7 @@ function Study({ state, persist, struggles, setStruggles, now, T }) {
   const [bankTopics, setBankTopics] = useState([]);       // topic ids that have banks
   const [openBank, setOpenBank] = useState(null);         // { topicId, name, questions } | null
   const [bankLoading, setBankLoading] = useState(false);
+  const [noteFor, setNoteFor] = useState(null);
   const bankCache = useRef({});
   useEffect(() => { api.listBanks().then((r) => setBankTopics(r.topics || [])).catch(() => {}); }, []);
 
@@ -666,6 +735,8 @@ function Study({ state, persist, struggles, setStruggles, now, T }) {
           <div style={{ fontSize: 8, letterSpacing: "0.16em", color: T.dim, fontWeight: 600 }}>DAY STREAK</div>
         </div>
       </div>
+      <HabitCard state={state} persist={persist} now={now} T={T} />
+
       {celebration && <ClusterCelebration data={celebration} onDone={() => setCelebration(null)} T={T} />}
       <div style={{ display: "flex", gap: 6, background: T.field, border: `1px solid ${T.line}`, borderRadius: 14, padding: 4 }}>
         {AREAS.map((a) => {
@@ -686,15 +757,16 @@ function Study({ state, persist, struggles, setStruggles, now, T }) {
         })}
       </div>
 
-      {areaSections(area).map((s) => <SectionCard key={s.id} s={s} state={state} onToggle={toggle} onFlag={toggleFlag} bankTopics={bankTopics} onOpenBank={showBank} T={T} />)}
+      {areaSections(area).map((s) => <SectionCard key={s.id} s={s} state={state} onToggle={toggle} onFlag={toggleFlag} bankTopics={bankTopics} onOpenBank={showBank} onNote={setNoteFor} T={T} />)}
       {bankLoading && <div style={{ position: "fixed", inset: 0, zIndex: 60, background: T.light ? "rgba(60,45,50,.35)" : "rgba(8,6,4,.6)", display: "grid", placeItems: "center", color: T.mut, fontSize: 13 }}>Opening bank…</div>}
-      {openBank && <BankView bank={openBank} stars={state.qbStars || {}} onStar={starQuestion} onUnstar={unstarQuestion} onClose={() => setOpenBank(null)} T={T} />}
+      {openBank && <BankView bank={openBank} state={state} stars={state.qbStars || {}} onStar={starQuestion} onUnstar={unstarQuestion} onNote={setNoteFor} onClose={() => setOpenBank(null)} T={T} />}
+      {noteFor && <NoteSheet topicId={noteFor} state={state} persist={persist} onClose={() => setNoteFor(null)} T={T} />}
       <StruggleBox state={state} persist={persist} struggles={struggles} setStruggles={setStruggles} today={today} T={T} />
     </>
   );
 }
 
-function SectionCard({ s, state, onToggle, onFlag, bankTopics, onOpenBank, T }) {
+function SectionCard({ s, state, onToggle, onFlag, bankTopics, onOpenBank, onNote, T }) {
   const [open, setOpen] = useState(s.id === "arith" || s.id === "varc");
   const st = sectionStats(state, s);
   return (
@@ -710,7 +782,7 @@ function SectionCard({ s, state, onToggle, onFlag, bankTopics, onOpenBank, T }) 
       {open && (
         <div style={{ padding: "0 12px 12px", display: "flex", flexDirection: "column", gap: 5 }}>
           {s.items.map((it) => it.kind === "s"
-            ? <SetRow key={it.id} it={it} state={state} onToggle={onToggle} onFlag={onFlag} hasBank={(bankTopics || []).includes(it.id)} onOpenBank={onOpenBank} T={T} />
+            ? <SetRow key={it.id} it={it} state={state} onToggle={onToggle} onFlag={onFlag} hasBank={(bankTopics || []).includes(it.id)} onOpenBank={onOpenBank} onNote={onNote} T={T} />
             : <ClassRow key={it.id} it={it} state={state} onToggle={onToggle} onFlag={onFlag} T={T} />)}
         </div>
       )}
@@ -740,14 +812,14 @@ function ClassRow({ it, state, onToggle, onFlag, T }) {
         {Icon.check(done ? T.onAccent : "transparent")}
       </button>
       <span style={{ flex: 1, fontSize: 13.5, fontWeight: done ? 600 : 500, color: done ? T.gold : T.ink, lineHeight: 1.3 }}>{it.name}</span>
-      <button onClick={() => onFlag(it.id)} style={{ width: 28, height: 28, borderRadius: 9, border: "none", background: "transparent", display: "grid", placeItems: "center" }}>
-        {state.flags[it.id] ? Icon.bookmarkFill(T.gold) : Icon.bookmark(T.line)}
+      <button onClick={() => onNote(it.id)} aria-label="concept note" style={{ width: 28, height: 28, borderRadius: 9, border: "none", background: "transparent", display: "grid", placeItems: "center", flexShrink: 0 }}>
+        {Icon.note((state.notes || {})[it.id] ? T.gold : T.line, 14)}
       </button>
     </div>
   );
 }
 
-function SetRow({ it, state, onToggle, onFlag, hasBank, onOpenBank, T }) {
+function SetRow({ it, state, onToggle, onFlag, hasBank, onOpenBank, onNote, T }) {
   const v = state.items[it.id] || {};
   const done = itemDone(state, it);
   const pill = (key, label) => (
@@ -774,8 +846,8 @@ function SetRow({ it, state, onToggle, onFlag, hasBank, onOpenBank, T }) {
       ) : (
         <>{pill("l1", "LOD 1")}{pill("l2", "LOD 2")}</>
       )}
-      <button onClick={() => onFlag(it.id)} style={{ width: 28, height: 28, borderRadius: 9, border: "none", background: "transparent", display: "grid", placeItems: "center" }}>
-        {state.flags[it.id] ? Icon.bookmarkFill(T.gold) : Icon.bookmark(T.line)}
+      <button onClick={() => onNote(it.id)} aria-label="concept note" style={{ width: 28, height: 28, borderRadius: 9, border: "none", background: "transparent", display: "grid", placeItems: "center", flexShrink: 0 }}>
+        {Icon.note((state.notes || {})[it.id] ? T.gold : T.line, 14)}
       </button>
     </div>
   );
@@ -904,6 +976,7 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
   const prioOf = (s) => prioOfItem(state, s);
   const bySection = filter === "all" ? queue : queue.filter((s) => topicSectionId(s.topicId) === filter);
   const [exportScope, setExportScope] = useState("due");
+  const [noteFor, setNoteFor] = useState(null);
   const [tour, setTour] = useState(false);
   const [tourLeft, setTourLeft] = useState(3);
   useEffect(() => { setTourLeft(Math.max(0, 3 - tutorialViews())); }, []);
@@ -954,7 +1027,7 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
   const [exportErr, setExportErr] = useState("");
   const doExport = async () => {
     setExporting(true); setExportErr("");
-    try { await exportRevisionDoc(filtered, flagged); }
+    try { await exportRevisionDoc(filtered, flagged, state.notes || {}); }
     catch (e) { console.error(e); setExportErr("Couldn't build the PDF — try again."); }
     setExporting(false);
   };
@@ -1003,7 +1076,7 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
           {due.length > 0 ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               <div data-tour="due" style={{ fontSize: 10.5, letterSpacing: "0.16em", color: T.accent, fontWeight: 700, margin: "4px 2px 0" }}>DUE NOW · {due.length}</div>
-              {due.map((s, idx) => <QueueCard key={s.id} s={s} tourAnchor={idx === 0} prio={prioOf(s)} dueIn={daysUntil(dueDate(state, s), today)} now={now} onRetire={() => retire(s.id)} onKeep={() => keep(s.id)} T={T} />)}
+              {due.map((s, idx) => <QueueCard key={s.id} s={s} tourAnchor={idx === 0} prio={prioOf(s)} dueIn={daysUntil(dueDate(state, s), today)} state={state} onNote={setNoteFor} now={now} onRetire={() => retire(s.id)} onKeep={() => keep(s.id)} T={T} />)}
             </div>
           ) : (
             <div className="card" style={{ padding: 22, textAlign: "center" }}>
@@ -1049,6 +1122,9 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
       )}
 
       {tour && <Tutorial onClose={() => setTour(false)} T={T} />}
+      {noteFor && <NoteSheet topicId={noteFor} state={state} persist={persist} onClose={() => setNoteFor(null)} T={T} />}
+
+      <NotesOverview state={state} onNote={setNoteFor} T={T} />
 
       {flagged.length > 0 && (
         <div className="card" style={{ padding: 20 }}>
@@ -1084,7 +1160,7 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
   );
 }
 
-function QueueCard({ s, prio, dueIn, tourAnchor, now, onRetire, onKeep, T }) {
+function QueueCard({ s, prio, dueIn, tourAnchor, state, onNote, now, onRetire, onKeep, T }) {
   const [img, setImg] = useState(null);
   const [lightbox, setLightbox] = useState(null);
   const [ansImg, setAnsImg] = useState(null);
@@ -1108,6 +1184,11 @@ function QueueCard({ s, prio, dueIn, tourAnchor, now, onRetire, onKeep, T }) {
           <img src={img} alt="question" style={{ borderRadius: 10, maxHeight: 220, maxWidth: "100%", border: `1px solid ${T.line}`, display: "block" }} />
           <span style={{ position: "absolute", bottom: 8, right: 8, background: T.light ? "rgba(50,40,42,.72)" : "rgba(8,6,4,.78)", border: `1px solid ${T.line}`, borderRadius: 99, padding: "4px 10px", fontSize: 10, fontWeight: 700, color: T.accent }}>tap to enlarge</span>
         </button>
+      )}
+      {state && onNote && (
+        <div style={{ marginTop: 10 }}>
+          <NoteInline topicId={s.topicId} state={state} onEdit={() => onNote(s.topicId)} T={T} />
+        </div>
       )}
       <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
         <button onClick={onRetire} {...(tourAnchor ? { "data-tour": "clear" } : {})} style={{ background: `linear-gradient(90deg, ${T.accent}, ${T.accent2})`, border: "none", borderRadius: 99, padding: "8px 15px", fontSize: 11.5, fontWeight: 700, color: T.onAccent }}>Got it — clear</button>
@@ -1762,7 +1843,7 @@ function Stat({ label, value, sub, T, color }) {
 const DIFF_ORDER = ["easy", "medium", "hard"];
 const DIFF_LABEL = { easy: "Warm-up", medium: "Core", hard: "Stretch" };
 
-function BankView({ bank, stars, onStar, onUnstar, onClose, T }) {
+function BankView({ bank, state, stars, onStar, onUnstar, onNote, onClose, T }) {
   const [starPicker, setStarPicker] = useState(null); // question id | null
   useEffect(() => {
     const onKey = (e) => e.key === "Escape" && onClose();
@@ -1785,6 +1866,9 @@ function BankView({ bank, stars, onStar, onUnstar, onClose, T }) {
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "14px 16px 60px", WebkitOverflowScrolling: "touch" }}>
+        <div style={{ marginBottom: 16 }}>
+          <NoteInline topicId={bank.topicId} state={state} onEdit={() => onNote(bank.topicId)} T={T} />
+        </div>
         {groups.map(({ d, qs }) => (
           <div key={d} style={{ marginBottom: 22 }}>
             <div style={{ display: "flex", alignItems: "baseline", gap: 8, margin: "6px 2px 10px" }}>
@@ -2027,5 +2111,279 @@ function Tutorial({ onClose, T }) {
         </div>
       </div>
     </div>
+  );
+}
+
+/* ================================================================
+   CONCEPT NOTES — written once per topic, surfaced everywhere that
+   topic appears: in the bank while solving, on every due revision
+   card, and in the exported PDF. The point is that she never has to
+   go looking for them.
+   ================================================================ */
+function NoteSheet({ topicId, state, persist, onClose, T }) {
+  const [text, setText] = useState((state.notes || {})[topicId] || "");
+  const name = topicName(topicId);
+  const save = () => {
+    persist(stampItem({ ...state, notes: { ...state.notes, [topicId]: text.trim() } }, "notes", topicId));
+    onClose();
+  };
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 85, background: T.light ? "rgba(60,45,50,.4)" : "rgba(8,6,4,.7)", backdropFilter: "blur(3px)", display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+      <div className="card" style={{ width: "100%", maxWidth: 560, borderRadius: "20px 20px 0 0", padding: 20, paddingBottom: "calc(20px + env(safe-area-inset-bottom))", maxHeight: "88vh", display: "flex", flexDirection: "column" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+          <div className="serif" style={{ fontSize: 18, fontWeight: 600, color: T.ink }}>{name}</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 12, color: T.dim, fontWeight: 600 }}>Cancel</button>
+        </div>
+        <div style={{ fontSize: 12, color: T.mut, marginBottom: 12, lineHeight: 1.5 }}>
+          The methods and traps worth remembering. This shows up whenever a {name} question comes back for revision.
+        </div>
+        <textarea autoFocus value={text} onChange={(e) => setText(e.target.value)} rows={10}
+          placeholder={"e.g.\n• Successive % → use multiplier, never add\n• Faulty weight: profit = (error / true weight) × 100\n• If SP same on both, always a net loss"}
+          style={{ width: "100%", flex: 1, background: T.field, border: `1px solid ${T.line}`, borderRadius: 13, padding: 13, fontSize: 13.5, color: T.ink, outline: "none", resize: "none", lineHeight: 1.65 }} />
+        <button onClick={save} style={{ width: "100%", marginTop: 12, background: `linear-gradient(90deg, ${T.accent}, ${T.accent2})`, border: "none", borderRadius: 12, padding: 13, fontSize: 13, fontWeight: 700, color: T.onAccent, flexShrink: 0 }}>Save note</button>
+      </div>
+    </div>
+  );
+}
+
+/* Compact, collapsible note shown inline on revision cards and in the bank. */
+function NoteInline({ topicId, state, onEdit, T }) {
+  const note = (state.notes || {})[topicId];
+  const [open, setOpen] = useState(false);
+  if (!note) return (
+    <button onClick={onEdit} style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: "none", padding: 0, fontSize: 11, fontWeight: 600, color: T.dim }}>
+      {Icon.note(T.dim, 12)} add a concept note
+    </button>
+  );
+  return (
+    <div style={{ background: T.field, border: `1px solid ${T.line}`, borderRadius: 11, overflow: "hidden" }}>
+      <button onClick={() => setOpen(!open)} style={{ width: "100%", background: "none", border: "none", padding: "9px 12px", display: "flex", alignItems: "center", gap: 8, textAlign: "left" }}>
+        {Icon.note(T.gold, 12)}
+        <span style={{ flex: 1, fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", color: T.gold }}>CONCEPT NOTE</span>
+        {Icon.chevron(open, T.dim)}
+      </button>
+      {open && (
+        <div style={{ padding: "0 12px 12px" }}>
+          <div style={{ fontSize: 13, color: T.ink, lineHeight: 1.65, whiteSpace: "pre-wrap" }}>{note}</div>
+          <button onClick={onEdit} style={{ marginTop: 9, background: "none", border: "none", padding: 0, fontSize: 11, fontWeight: 700, color: T.accent }}>Edit</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* All concept notes in one place — collapsed, for when she wants to read
+   through them rather than meet them one at a time during revision. */
+function NotesOverview({ state, onNote, T }) {
+  const written = TOPIC_OPTIONS.filter((t) => (state.notes || {})[t.id]);
+  return (
+    <details className="card" style={{ padding: "4px 0" }}>
+      <summary style={{ cursor: "pointer", listStyle: "none", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "13px 18px" }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, color: T.mut }}>
+          {Icon.note(T.dim, 13)} Concept notes
+        </span>
+        <span style={{ fontSize: 11.5, color: T.dim }}>{written.length} written {Icon.chevron(false, T.dim)}</span>
+      </summary>
+      <div style={{ padding: "0 14px 14px" }}>
+        <div style={{ fontSize: 11.5, color: T.dim, lineHeight: 1.55, marginBottom: 10 }}>
+          Written once per topic, shown again automatically whenever a question from that topic comes back.
+        </div>
+        {written.length === 0 ? (
+          <div style={{ fontSize: 12.5, color: T.mut }}>Nothing written yet. Open any topic's Question Bank and add one as you learn the method.</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {written.map((t) => (
+              <button key={t.id} onClick={() => onNote(t.id)}
+                style={{ textAlign: "left", background: T.card2, border: `1px solid ${T.line}`, borderRadius: 12, padding: "11px 13px" }}>
+                <div style={{ fontSize: 9.5, letterSpacing: "0.1em", fontWeight: 700, color: T.gold }}>{t.name.toUpperCase()}</div>
+                <div style={{ fontSize: 12.5, color: T.mut, marginTop: 4, lineHeight: 1.5, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+                  {(state.notes || {})[t.id]}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+        <div style={{ marginTop: 12 }}>
+          <select onChange={(e) => { if (e.target.value) { onNote(e.target.value); e.target.value = ""; } }} defaultValue=""
+            style={{ width: "100%", background: T.field, border: `1px solid ${T.line}`, borderRadius: 11, padding: "10px", fontSize: 12.5, color: T.mut, outline: "none" }}>
+            <option value="">Write a note for…</option>
+            {SECTIONS.map((sec) => {
+              const opts = TOPIC_OPTIONS.filter((t) => t.sectionId === sec.id);
+              if (!opts.length) return null;
+              return <optgroup key={sec.id} label={sec.name}>{opts.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</optgroup>;
+            })}
+          </select>
+        </div>
+      </div>
+    </details>
+  );
+}
+
+/* ================================================================
+   HABIT TRACKER — collapsed on the Study tab. Two columns, one streak.
+   ================================================================ */
+function HabitCard({ state, persist, now, T }) {
+  const [open, setOpen] = useState(false);
+  const [adding, setAdding] = useState(null);      // person id | null
+  const [newName, setNewName] = useState("");
+  const [newCore, setNewCore] = useState(true);
+  const [milestone, setMilestone] = useState(null);
+  const hKey = habitDayKey(now);
+
+  const { days: streak } = habitStreak(state, hKey);
+  const best = Math.max(bestHabitStreak(state), streak);
+  const bothToday = dayComplete(state, hKey);
+  const nextMs = HABIT_MILESTONES.find((m) => m > streak);
+
+  const toggleHabit = (pid, hid) => {
+    const dayEntry = state.habitLog?.[hKey] || {};
+    const ticks = dayEntry[pid] || [];
+    const nextTicks = ticks.includes(hid) ? ticks.filter((x) => x !== hid) : [...ticks, hid];
+    const nextLog = { ...state.habitLog, [hKey]: { ...dayEntry, [pid]: nextTicks } };
+    const next = stampItem({ ...state, habitLog: nextLog }, "habitLog", hKey);
+
+    // did that tick complete the day for both of them?
+    const wasComplete = dayComplete(state, hKey);
+    const nowComplete = dayComplete(next, hKey);
+    if (!wasComplete && nowComplete) {
+      const s2 = habitStreak(next, hKey).days;
+      if (HABIT_MILESTONES.includes(s2)) setMilestone(s2);
+    }
+    persist(next);
+  };
+
+  const addHabit = (pid) => {
+    const name = newName.trim();
+    if (!name) return;
+    const list = state.habits?.[pid] || [];
+    const habit = { id: `h${Date.now().toString(36)}`, name, core: newCore };
+    persist(stampItem({ ...state, habits: { ...state.habits, [pid]: [...list, habit] } }, "habits", pid));
+    setNewName(""); setNewCore(true); setAdding(null);
+  };
+  const removeHabit = (pid, hid) => {
+    const list = (state.habits?.[pid] || []).filter((h) => h.id !== hid);
+    persist(stampItem({ ...state, habits: { ...state.habits, [pid]: list } }, "habits", pid));
+  };
+
+  const anyHabits = PEOPLE.some((p) => (state.habits?.[p.id] || []).length);
+
+  return (
+    <>
+      {milestone && <HabitMilestone days={milestone} onClose={() => setMilestone(null)} T={T} />}
+      <div className="card" style={{ overflow: "hidden", border: `1px solid ${bothToday ? T.gold + "66" : T.line}`, boxShadow: bothToday ? `0 0 26px ${T.accent}22` : "none" }}>
+        <button onClick={() => setOpen(!open)} style={{ width: "100%", background: "none", border: "none", color: T.ink, textAlign: "left", padding: "16px 18px", display: "flex", alignItems: "center", gap: 14 }}>
+          <div style={{ textAlign: "center", flexShrink: 0, minWidth: 52 }}>
+            <div className="serif glowText" style={{ fontSize: 27, fontWeight: 700, color: streak > 0 ? T.accent : T.dim, lineHeight: 1 }}>{streak}</div>
+            <div style={{ fontSize: 7.5, letterSpacing: "0.14em", color: T.dim, fontWeight: 700, marginTop: 3 }}>TOGETHER</div>
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="serif" style={{ fontSize: 16.5, fontWeight: 600 }}>Daily habits</div>
+            <div style={{ fontSize: 11.5, color: bothToday ? T.gold : T.mut, marginTop: 2, fontWeight: bothToday ? 600 : 400 }}>
+              {!anyHabits ? "Tap to set up your habits"
+                : bothToday ? "Both done today — streak is safe"
+                : PEOPLE.map((p) => `${p.name}: ${personComplete(state, p.id, hKey) ? "done" : "pending"}`).join(" · ")}
+            </div>
+          </div>
+          {Icon.chevron(open, T.dim)}
+        </button>
+
+        {open && (
+          <div style={{ padding: "0 14px 16px" }}>
+            {streak > 0 && (
+              <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                <div style={{ flex: 1, background: T.card2, border: `1px solid ${T.line}`, borderRadius: 11, padding: "9px 11px" }}>
+                  <div style={{ fontSize: 8.5, letterSpacing: "0.12em", color: T.dim, fontWeight: 700 }}>BEST EVER</div>
+                  <div className="serif" style={{ fontSize: 17, fontWeight: 700, color: T.gold }}>{best}</div>
+                </div>
+                {nextMs && (
+                  <div style={{ flex: 2, background: T.card2, border: `1px solid ${T.line}`, borderRadius: 11, padding: "9px 11px" }}>
+                    <div style={{ fontSize: 8.5, letterSpacing: "0.12em", color: T.dim, fontWeight: 700 }}>NEXT MILESTONE</div>
+                    <div style={{ fontSize: 12.5, color: T.ink, fontWeight: 600, marginTop: 2 }}>{nextMs - streak} day{nextMs - streak === 1 ? "" : "s"} to {nextMs}</div>
+                    <div style={{ height: 3, background: T.field, borderRadius: 99, marginTop: 6 }}>
+                      <div style={{ height: "100%", width: `${(streak / nextMs) * 100}%`, background: `linear-gradient(90deg, ${T.accent}, ${T.accent2})`, borderRadius: 99 }} />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 10 }}>
+              {PEOPLE.map((p) => {
+                const list = state.habits?.[p.id] || [];
+                const ticks = state.habitLog?.[hKey]?.[p.id] || [];
+                const done = personComplete(state, p.id, hKey);
+                return (
+                  <div key={p.id} style={{ flex: 1, minWidth: 0, background: T.card2, border: `1px solid ${done ? T.gold + "55" : T.line}`, borderRadius: 14, padding: 11 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 9 }}>
+                      <span style={{ fontSize: 11.5, fontWeight: 700, color: done ? T.gold : T.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
+                      {done && Icon.check(T.gold, 11)}
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {list.length === 0 && <div style={{ fontSize: 11, color: T.dim, lineHeight: 1.4 }}>No habits yet</div>}
+                      {list.map((h) => {
+                        const on = ticks.includes(h.id);
+                        return (
+                          <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                            <button onClick={() => toggleHabit(p.id, h.id)} style={{ width: 20, height: 20, flexShrink: 0, borderRadius: 7, border: `1.5px solid ${on ? T.accent : T.line}`, background: on ? `linear-gradient(90deg, ${T.accent}, ${T.accent2})` : "transparent", display: "grid", placeItems: "center" }}>
+                              {Icon.check(on ? T.onAccent : "transparent", 10)}
+                            </button>
+                            <span onClick={() => toggleHabit(p.id, h.id)} style={{ flex: 1, minWidth: 0, fontSize: 11.5, lineHeight: 1.35, color: on ? T.gold : T.ink, textDecoration: on ? "none" : "none", cursor: "pointer" }}>
+                              {h.name}{h.core === false && <span style={{ color: T.dim, fontSize: 9 }}> · bonus</span>}
+                            </span>
+                            <button onClick={() => removeHabit(p.id, h.id)} style={{ background: "none", border: "none", color: T.dim, fontSize: 13, padding: 0, lineHeight: 1, flexShrink: 0 }}>×</button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {adding === p.id ? (
+                      <div style={{ marginTop: 9 }}>
+                        <input autoFocus value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addHabit(p.id)}
+                          placeholder="habit name" style={{ width: "100%", background: T.field, border: `1px solid ${T.line}`, borderRadius: 9, padding: "7px 8px", fontSize: 11.5, color: T.ink, outline: "none" }} />
+                        <div style={{ display: "flex", gap: 5, marginTop: 6, alignItems: "center" }}>
+                          <button onClick={() => setNewCore(!newCore)} style={{ background: newCore ? T.field : "transparent", border: `1px solid ${newCore ? T.accent : T.line}`, borderRadius: 99, padding: "4px 8px", fontSize: 9.5, fontWeight: 700, color: newCore ? T.accent : T.dim }}>
+                            {newCore ? "core" : "bonus"}
+                          </button>
+                          <button onClick={() => addHabit(p.id)} style={{ flex: 1, background: `linear-gradient(90deg, ${T.accent}, ${T.accent2})`, border: "none", borderRadius: 9, padding: "6px 0", fontSize: 10.5, fontWeight: 700, color: T.onAccent }}>Add</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button onClick={() => { setAdding(p.id); setNewName(""); setNewCore(true); }} style={{ marginTop: 9, background: "none", border: "none", padding: 0, fontSize: 10.5, fontWeight: 700, color: T.accent }}>+ habit</button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div style={{ fontSize: 10, color: T.dim, marginTop: 12, lineHeight: 1.55 }}>
+              The streak moves only when you have both finished your core habits. Bonus habits never break it, the day stays open until 4am, and two missed days a month are covered automatically.
+            </div>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+function HabitMilestone({ days, onClose, T }) {
+  useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, []);
+  const parts = Array.from({ length: 30 }, (_, i) => {
+    const a = (360 / 30) * i * 3, r = 60 + (i % 4) * 30, rad = (a * Math.PI) / 180;
+    return { x: Math.cos(rad) * r, y: Math.sin(rad) * r, s: 3 + (i % 3) * 2, d: (i % 5) * 30, c: i % 3 === 0 ? T.gold : i % 3 === 1 ? T.accent : T.accent2 };
+  });
+  return (
+    <button onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 60, border: "none", background: T.light ? "rgba(60,45,50,.4)" : "rgba(8,6,4,.66)", backdropFilter: "blur(3px)", display: "grid", placeItems: "center", padding: 20 }}>
+      <style>{`@keyframes hb { 0%{transform:translate(0,0) scale(.3);opacity:0} 18%{opacity:1} 100%{transform:translate(var(--x),var(--y)) scale(1);opacity:0} }`}</style>
+      <div style={{ position: "relative", width: 1, height: 1 }}>
+        {parts.map((p, i) => (
+          <div key={i} style={{ position: "absolute", width: p.s, height: p.s, borderRadius: "50%", background: p.c, boxShadow: `0 0 8px ${p.c}`, "--x": `${p.x}px`, "--y": `${p.y}px`, animation: `hb 1.2s cubic-bezier(.2,.7,.3,1) ${p.d}ms forwards` }} />
+        ))}
+      </div>
+      <div className="card" style={{ padding: "28px 32px", textAlign: "center", border: `1px solid ${T.gold}55`, boxShadow: `0 0 46px ${T.accent}33`, position: "relative" }}>
+        <div style={{ fontSize: 9.5, letterSpacing: "0.22em", color: T.dim, fontWeight: 700 }}>TOGETHER</div>
+        <div className="serif glowText" style={{ fontSize: 46, fontWeight: 700, color: T.accent, lineHeight: 1.05, margin: "6px 0 2px" }}>{days}</div>
+        <div className="serif" style={{ fontSize: 17, fontWeight: 600, color: T.gold }}>days unbroken</div>
+        <div style={{ fontSize: 11.5, color: T.mut, marginTop: 10, maxWidth: 210, lineHeight: 1.5 }}>Both of you, every day. That is the hard part done.</div>
+      </div>
+    </button>
   );
 }
