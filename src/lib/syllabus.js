@@ -75,3 +75,25 @@ export const ALL_ITEMS = SECTIONS.flatMap((s) =>
 );
 export const ITEM_BY_ID = Object.fromEntries(ALL_ITEMS.map((i) => [i.id, i]));
 export const CLASSIFY_LIST = ALL_ITEMS;
+
+/* ---------------- LRDI ----------------
+   No LOD practice sets (nothing to grade beyond "watched it"), so each
+   topic is a run of numbered video-chips rather than named classes.
+   Counts and the one known gap (Games & Tournaments #7 is unlisted/
+   missing) are taken directly from the Rodha playlist. */
+export const LRDI_TOPICS = [
+  { id: "lrdi-lca", name: "Linear & Circular Arrangement", count: 5 },
+  { id: "lrdi-cubes", name: "Cubes", count: 4 },
+  { id: "lrdi-ns", name: "Number Series", count: 6 },
+  { id: "lrdi-qbp", name: "Quant Based Puzzle", count: 22 },
+  { id: "lrdi-venn", name: "Venn Diagram", count: 9 },
+  { id: "lrdi-maxmin1", name: "Maxi & Minim", count: 2 },
+  { id: "lrdi-choc", name: "Chocolate Distribution", count: 2 },
+  { id: "lrdi-games", name: "Games & Tournament", count: 8, gaps: [7] },
+  { id: "lrdi-pie", name: "Pie Chart", count: 5 },
+  { id: "lrdi-tab", name: "Tabular Set", count: 1 },
+  { id: "lrdi-routes", name: "Routes & Network", count: 3 },
+  { id: "lrdi-maxmin2", name: "Maxima Minima", count: 2 },
+  { id: "lrdi-cal", name: "Calendars", count: 3 },
+  { id: "lrdi-prac", name: "Practice Set", count: 13 },
+];

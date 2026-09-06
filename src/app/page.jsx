@@ -2,7 +2,31 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { api, getCode, setCode, clearCode, fetchPhotoUrl } from "@/lib/api";
 import { THEMES, THEME_KEY } from "@/lib/themes";
-import { SECTIONS, ALL_ITEMS, ITEM_BY_ID, CLASSIFY_LIST } from "@/lib/syllabus";
+import { SECTIONS, ALL_ITEMS, ITEM_BY_ID, CLASSIFY_LIST, LRDI_TOPICS } from "@/lib/syllabus";
+
+/* LRDI has no classes/sets — each topic is a run of numbered video-chips.
+   We synthesise "items" for them (one per real chip, kind "v") and give the
+   section .groups exactly like VARC, so clusters/celebrations/dashboard
+   totals/pace all treat LRDI like any other section with zero special-
+   casing downstream. A "gap" index (a video that's missing from the
+   playlist) is simply never created as an item — the chip still renders,
+   disabled, so the numbering stays honest without it counting toward
+   anything. */
+const LRDI_SECTION = {
+  id: "lrdi", name: "Logic (LRDI)",
+  groups: LRDI_TOPICS.map((t) => ({ id: t.id, name: t.name, count: t.count })),
+  items: LRDI_TOPICS.flatMap((t) =>
+    Array.from({ length: t.count }, (_, i) => i + 1)
+      .filter((n) => !(t.gaps || []).includes(n))
+      .map((n) => ({ id: `${t.id}-${n}`, kind: "v", name: `${t.name} ${n}`, lrdiTopic: t.id, lrdiIdx: n }))
+  ),
+};
+const ALL_SECTIONS = [...SECTIONS, LRDI_SECTION];
+const LRDI_ITEM_BY_ID = Object.fromEntries(LRDI_SECTION.items.map((it) => [it.id, it]));
+const FULL_ITEM_BY_ID = { ...ITEM_BY_ID, ...LRDI_ITEM_BY_ID };
+/* which section an item id belongs to, used for whole-section celebrations */
+const SECTION_OF_ITEM = Object.fromEntries(ALL_SECTIONS.flatMap((sec) => sec.items.map((it) => [it.id, sec.id])));
+
 
 const EXAM_DATE = new Date(2026, 10, 29);
 const START_DATE = new Date(2026, 7, 11);
@@ -53,7 +77,7 @@ function buildClusters(section) {
     section.groups.forEach((g, gi) => {
       const slice = section.items.slice(idx, idx + g.count);
       idx += g.count;
-      if (slice.length) clusters.push({ id: `${section.id}-cl${gi}`, name: g.name, classIds: slice.map((c) => c.id), setId: null });
+      if (slice.length) clusters.push({ id: g.id || `${section.id}-cl${gi}`, name: g.name, classIds: slice.map((c) => c.id), setId: null });
     });
     return clusters;
   }
@@ -64,14 +88,15 @@ function buildClusters(section) {
   });
   return clusters;
 }
-const CLUSTERS_BY_SECTION = Object.fromEntries(SECTIONS.map((s) => [s.id, buildClusters(s)]));
-const ALL_CLUSTERS = SECTIONS.flatMap((s) => CLUSTERS_BY_SECTION[s.id]);
+const CLUSTERS_BY_SECTION = Object.fromEntries(ALL_SECTIONS.map((s) => [s.id, buildClusters(s)]));
+const ALL_CLUSTERS = ALL_SECTIONS.flatMap((s) => CLUSTERS_BY_SECTION[s.id]);
 
 function clusterAllIds(cl) { return cl.setId ? [...cl.classIds, cl.setId] : [...cl.classIds]; }
 function clusterDone(state, cl) {
   const classesDone = cl.classIds.every((id) => !!(state.items[id] || {}).v);
-  return classesDone && (!cl.setId || itemDone(state, ITEM_BY_ID[cl.setId]));
+  return classesDone && (!cl.setId || itemDone(state, FULL_ITEM_BY_ID[cl.setId]));
 }
+function sectionAllDone(state, section) { return section.items.every((it) => itemDone(state, it)); }
 function clustersContaining(itemId) {
   return ALL_CLUSTERS.filter((cl) => clusterAllIds(cl).includes(itemId));
 }
@@ -81,15 +106,16 @@ function clustersContaining(itemId) {
 const AREAS = [
   { id: "quant", label: "Quant", sectionIds: ["arith", "algebra", "geo", "num", "mod"] },
   { id: "varc", label: "VARC", sectionIds: ["varc"] },
+  { id: "logic", label: "Logic", sectionIds: ["lrdi"] },
 ];
-const areaSections = (areaId) => SECTIONS.filter((s) => (AREAS.find((a) => a.id === areaId)?.sectionIds || []).includes(s.id));
+const areaSections = (areaId) => ALL_SECTIONS.filter((s) => (AREAS.find((a) => a.id === areaId)?.sectionIds || []).includes(s.id));
 
 
 /* Questions come from the book's chapters, not from individual classes —
    there is no LOD set for "Successive %", only for Percentages as a whole.
    So filing offers the 19 practice-set chapters plus VARC's 5 groups:
    24 options instead of 142. */
-const TOPIC_OPTIONS = SECTIONS.flatMap((sec) => {
+const TOPIC_OPTIONS = ALL_SECTIONS.flatMap((sec) => {
   const sets = sec.items.filter((i) => i.kind === "s");
   if (sets.length) return sets.map((it) => ({ id: it.id, name: it.name, sectionId: sec.id, sectionName: sec.name }));
   return (CLUSTERS_BY_SECTION[sec.id] || []).map((cl) => ({ id: cl.id, name: cl.name, sectionId: sec.id, sectionName: sec.name }));
@@ -98,8 +124,8 @@ const TOPIC_OPTION_BY_ID = Object.fromEntries(TOPIC_OPTIONS.map((t) => [t.id, t]
 
 /* Filed questions may carry either a chapter id, a cluster id, or (from
    before this change) a plain class id — resolve all three. */
-const topicName = (id) => TOPIC_OPTION_BY_ID[id]?.name || ITEM_BY_ID[id]?.name || "Other";
-const topicSectionId = (id) => TOPIC_OPTION_BY_ID[id]?.sectionId || ITEM_BY_ID[id]?.sectionId || null;
+const topicName = (id) => TOPIC_OPTION_BY_ID[id]?.name || FULL_ITEM_BY_ID[id]?.name || "Other";
+const topicSectionId = (id) => TOPIC_OPTION_BY_ID[id]?.sectionId || FULL_ITEM_BY_ID[id]?.sectionId || null;
 
 
 const weekStart = (ds) => { const d = new Date(ds + "T00:00:00"); const off = (d.getDay() + 6) % 7; d.setDate(d.getDate() - off); return dayKey(d); };
@@ -194,8 +220,9 @@ function bestHabitStreak(state) {
   return best;
 }
 
+
 function defaultState() {
-  return { settings: { revisionDays: [0] }, items: {}, flags: {}, celebrated: {}, qbStars: {}, sched: {}, notes: {}, habits: {}, habitLog: {}, mocks: [], log: [], digest: "", digestDate: "", meta: {} };
+  return { settings: { revisionDays: [0] }, items: {}, flags: {}, celebrated: {}, sectionCelebrated: {}, qbStars: {}, sched: {}, notes: {}, habits: {}, habitLog: {}, mocks: [], log: [], digest: "", digestDate: "", meta: {} };
 }
 
 const itemDone = (st, it) => { const v = st.items[it.id] || {}; return it.kind === "s" ? !!(v.qb || (v.l1 && v.l2)) : !!v.v; };
@@ -700,6 +727,7 @@ function Study({ state, persist, struggles, setStruggles, now, T }) {
   const isRevisionDay = state.settings.revisionDays.includes(now.getDay());
   const streak = streakDays(state);
   const [celebration, setCelebration] = useState(null);
+  const [sectionCelebration, setSectionCelebration] = useState(null);
   const [area, setArea] = useState("quant");
 
   const logAct = (next, type) => ({ ...next, log: [...state.log, { date: today, type, seq: Date.now() }] });
@@ -710,13 +738,26 @@ function Study({ state, persist, struggles, setStruggles, now, T }) {
     next = stampItem(next, "items", id);
     if (val) next = logAct(next, key);
 
+    let miniFired = false;
     if (val) {
       for (const cl of clustersContaining(id)) {
         if (clusterDone(next, cl) && !next.celebrated?.[cl.id]) {
           next = stampItem({ ...next, celebrated: { ...next.celebrated, [cl.id]: true } }, "celebrated", cl.id);
           setCelebration({ name: cl.name });
+          miniFired = true;
           break;
         }
+      }
+
+      // whole-section completion outranks a single cluster — if this tick
+      // finishes the entire section, show the huge celebration instead of
+      // (not in addition to) the mini one, so nothing overlaps on screen.
+      const secId = SECTION_OF_ITEM[id];
+      const section = ALL_SECTIONS.find((sec) => sec.id === secId);
+      if (section && sectionAllDone(next, section) && !next.sectionCelebrated?.[secId]) {
+        next = stampItem({ ...next, sectionCelebrated: { ...next.sectionCelebrated, [secId]: true } }, "sectionCelebrated", secId);
+        setSectionCelebration({ name: section.name });
+        if (miniFired) setCelebration(null);
       }
     }
     persist(next);
@@ -738,6 +779,7 @@ function Study({ state, persist, struggles, setStruggles, now, T }) {
       <HabitCard state={state} persist={persist} now={now} T={T} />
 
       {celebration && <ClusterCelebration data={celebration} onDone={() => setCelebration(null)} T={T} />}
+      {sectionCelebration && <SectionCelebration data={sectionCelebration} onDone={() => setSectionCelebration(null)} T={T} />}
       <div style={{ display: "flex", gap: 6, background: T.field, border: `1px solid ${T.line}`, borderRadius: 14, padding: 4 }}>
         {AREAS.map((a) => {
           const secs = areaSections(a.id);
@@ -781,9 +823,11 @@ function SectionCard({ s, state, onToggle, onFlag, bankTopics, onOpenBank, onNot
       </button>
       {open && (
         <div style={{ padding: "0 12px 12px", display: "flex", flexDirection: "column", gap: 5 }}>
-          {s.items.map((it) => it.kind === "s"
-            ? <SetRow key={it.id} it={it} state={state} onToggle={onToggle} onFlag={onFlag} hasBank={(bankTopics || []).includes(it.id)} onOpenBank={onOpenBank} onNote={onNote} T={T} />
-            : <ClassRow key={it.id} it={it} state={state} onToggle={onToggle} onFlag={onFlag} T={T} />)}
+          {s.id === "lrdi"
+            ? LRDI_TOPICS.map((t) => <TopicChipRow key={t.id} topic={t} state={state} onToggle={onToggle} onNote={onNote} T={T} />)
+            : s.items.map((it) => it.kind === "s"
+              ? <SetRow key={it.id} it={it} state={state} onToggle={onToggle} onFlag={onFlag} hasBank={(bankTopics || []).includes(it.id)} onOpenBank={onOpenBank} onNote={onNote} T={T} />
+              : <ClassRow key={it.id} it={it} state={state} onToggle={onToggle} onFlag={onFlag} T={T} />)}
         </div>
       )}
     </div>
@@ -992,7 +1036,7 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
   const upcoming = bySection.filter((s) => !isDue(state, s, today))
     .sort((a, b) => (dueDate(state, a) < dueDate(state, b) ? -1 : 1));
   const filtered = exportScope === "all" ? [...due, ...upcoming] : due;
-  const flagged = Object.keys(state.flags).filter((id) => state.flags[id] && ITEM_BY_ID[id]);
+  const flagged = Object.keys(state.flags).filter((id) => state.flags[id] && FULL_ITEM_BY_ID[id]);
   const archive = struggles.filter((s) => s.retired);
 
   const update = async (id, patch) => {
@@ -1132,7 +1176,7 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {flagged.map((id) => (
               <div key={id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, background: T.card2, borderRadius: 12, padding: 12, border: `1px solid ${T.line}` }}>
-                <div style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>{Icon.bookmarkFill(T.gold, 12)} {ITEM_BY_ID[id].name} <span style={{ color: T.dim, fontSize: 11 }}>· {ITEM_BY_ID[id].sectionName}</span></div>
+                <div style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>{Icon.bookmarkFill(T.gold, 12)} {FULL_ITEM_BY_ID[id].name} <span style={{ color: T.dim, fontSize: 11 }}>· {FULL_ITEM_BY_ID[id].sectionName}</span></div>
                 <button onClick={() => unflag(id)} style={{ background: T.card, border: `1px solid ${T.line}`, borderRadius: 99, padding: "6px 13px", fontSize: 11, fontWeight: 700, color: T.mut, flexShrink: 0 }}>Revisited</button>
               </div>
             ))}
@@ -1343,22 +1387,27 @@ function Dashboard({ state, persist, struggles, now, T }) {
 function ResetCard({ state, persist, T }) {
   const [confirming, setConfirming] = useState(null); // null | "celebrations" | "all"
 
-  const celebratedCount = Object.values(state.celebrated || {}).filter(Boolean).length;
+  const celebratedCount = Object.values(state.celebrated || {}).filter(Boolean).length + Object.values(state.sectionCelebrated || {}).filter(Boolean).length;
   const tickedCount = Object.keys(state.items || {}).filter((id) => {
     const v = state.items[id] || {};
     return v.v || v.l1 || v.l2;
   }).length;
 
   const resetCelebrations = () => {
-    let next = { ...state, celebrated: Object.fromEntries(Object.keys(state.celebrated || {}).map((id) => [id, false])) };
+    let next = {
+      ...state,
+      celebrated: Object.fromEntries(Object.keys(state.celebrated || {}).map((id) => [id, false])),
+      sectionCelebrated: Object.fromEntries(Object.keys(state.sectionCelebrated || {}).map((id) => [id, false])),
+    };
     Object.keys(state.celebrated || {}).forEach((id) => { next = stampItem(next, "celebrated", id); });
+    Object.keys(state.sectionCelebrated || {}).forEach((id) => { next = stampItem(next, "sectionCelebrated", id); });
     persist(next);
     setConfirming(null);
   };
 
   const resetAll = () => {
     const blank = (obj, v) => Object.fromEntries(Object.keys(obj || {}).map((k) => [k, v]));
-    let next = { ...state, items: blank(state.items, {}), flags: blank(state.flags, false), celebrated: blank(state.celebrated, false), log: [] };
+    let next = { ...state, items: blank(state.items, {}), flags: blank(state.flags, false), celebrated: blank(state.celebrated, false), sectionCelebrated: blank(state.sectionCelebrated, false), log: [] };
     Object.keys(state.items || {}).forEach((id) => { next = stampItem(next, "items", id); });
     Object.keys(state.flags || {}).forEach((id) => { next = stampItem(next, "flags", id); });
     Object.keys(state.celebrated || {}).forEach((id) => { next = stampItem(next, "celebrated", id); });
@@ -1726,7 +1775,7 @@ function PaceAnalyzer({ state, done, total, expected, tone, cleared, queueN, now
     // only count timestamps for items that are STILL completed — unticking
     // during testing used to leave a stale stamp and inflate the rate
     const stamps = Object.entries(state.meta?.items || {})
-      .filter(([id, t]) => t && ITEM_BY_ID[id] && itemDone(state, ITEM_BY_ID[id]))
+      .filter(([id, t]) => t && FULL_ITEM_BY_ID[id] && itemDone(state, FULL_ITEM_BY_ID[id]))
       .map(([, t]) => t)
       .sort((a, b) => a - b);
     if (stamps.length < 3) return { ok: false, reason: "Not enough activity yet — a few more days of data will make this meaningful." };
@@ -2121,26 +2170,43 @@ function Tutorial({ onClose, T }) {
    go looking for them.
    ================================================================ */
 function NoteSheet({ topicId, state, persist, onClose, T }) {
-  const [text, setText] = useState((state.notes || {})[topicId] || "");
+  const existing = (state.notes || {})[topicId] || "";
+  const [text, setText] = useState(existing);
+  const [mode, setMode] = useState(existing ? "preview" : "edit"); // long authored notes open readable, not as a raw box
   const name = topicName(topicId);
   const save = () => {
     persist(stampItem({ ...state, notes: { ...state.notes, [topicId]: text.trim() } }, "notes", topicId));
+    setMode("preview");
     onClose();
   };
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 85, background: T.light ? "rgba(60,45,50,.4)" : "rgba(8,6,4,.7)", backdropFilter: "blur(3px)", display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
-      <div className="card" style={{ width: "100%", maxWidth: 560, borderRadius: "20px 20px 0 0", padding: 20, paddingBottom: "calc(20px + env(safe-area-inset-bottom))", maxHeight: "88vh", display: "flex", flexDirection: "column" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+      <div className="card" style={{ width: "100%", maxWidth: 620, borderRadius: "20px 20px 0 0", padding: 20, paddingBottom: "calc(20px + env(safe-area-inset-bottom))", maxHeight: "90vh", display: "flex", flexDirection: "column" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4, flexShrink: 0 }}>
           <div className="serif" style={{ fontSize: 18, fontWeight: 600, color: T.ink }}>{name}</div>
-          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 12, color: T.dim, fontWeight: 600 }}>Cancel</button>
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            {existing && (
+              <button onClick={() => setMode(mode === "preview" ? "edit" : "preview")} style={{ background: "none", border: "none", fontSize: 11.5, color: T.accent, fontWeight: 700 }}>
+                {mode === "preview" ? "Edit" : "Preview"}
+              </button>
+            )}
+            <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 12, color: T.dim, fontWeight: 600 }}>Close</button>
+          </div>
         </div>
-        <div style={{ fontSize: 12, color: T.mut, marginBottom: 12, lineHeight: 1.5 }}>
-          The methods and traps worth remembering. This shows up whenever a {name} question comes back for revision.
-        </div>
-        <textarea autoFocus value={text} onChange={(e) => setText(e.target.value)} rows={10}
-          placeholder={"e.g.\n• Successive % → use multiplier, never add\n• Faulty weight: profit = (error / true weight) × 100\n• If SP same on both, always a net loss"}
-          style={{ width: "100%", flex: 1, background: T.field, border: `1px solid ${T.line}`, borderRadius: 13, padding: 13, fontSize: 13.5, color: T.ink, outline: "none", resize: "none", lineHeight: 1.65 }} />
-        <button onClick={save} style={{ width: "100%", marginTop: 12, background: `linear-gradient(90deg, ${T.accent}, ${T.accent2})`, border: "none", borderRadius: 12, padding: 13, fontSize: 13, fontWeight: 700, color: T.onAccent, flexShrink: 0 }}>Save note</button>
+
+        {mode === "preview" ? (
+          <div style={{ overflowY: "auto", flex: 1, paddingTop: 8 }}>{renderNoteMarkdown(text, T)}</div>
+        ) : (
+          <>
+            <div style={{ fontSize: 12, color: T.mut, margin: "8px 0 12px", lineHeight: 1.5 }}>
+              The methods and traps worth remembering. This shows up whenever a {name} question comes back for revision.
+            </div>
+            <textarea autoFocus value={text} onChange={(e) => setText(e.target.value)} rows={14}
+              placeholder={"e.g.\n• Successive % → use multiplier, never add\n• Faulty weight: profit = (error / true weight) × 100\n• If SP same on both, always a net loss"}
+              style={{ width: "100%", flex: 1, background: T.field, border: `1px solid ${T.line}`, borderRadius: 13, padding: 13, fontSize: 13, color: T.ink, outline: "none", resize: "none", lineHeight: 1.6, fontFamily: "ui-monospace, monospace" }} />
+            <button onClick={save} style={{ width: "100%", marginTop: 12, background: `linear-gradient(90deg, ${T.accent}, ${T.accent2})`, border: "none", borderRadius: 12, padding: 13, fontSize: 13, fontWeight: 700, color: T.onAccent, flexShrink: 0 }}>Save note</button>
+          </>
+        )}
       </div>
     </div>
   );
@@ -2164,8 +2230,8 @@ function NoteInline({ topicId, state, onEdit, T }) {
       </button>
       {open && (
         <div style={{ padding: "0 12px 12px" }}>
-          <div style={{ fontSize: 13, color: T.ink, lineHeight: 1.65, whiteSpace: "pre-wrap" }}>{note}</div>
-          <button onClick={onEdit} style={{ marginTop: 9, background: "none", border: "none", padding: 0, fontSize: 11, fontWeight: 700, color: T.accent }}>Edit</button>
+          <div>{renderNoteMarkdown(note, T)}</div>
+          <button onClick={onEdit} style={{ marginTop: 4, background: "none", border: "none", padding: 0, fontSize: 11, fontWeight: 700, color: T.accent }}>Edit raw text</button>
         </div>
       )}
     </div>
@@ -2383,6 +2449,214 @@ function HabitMilestone({ days, onClose, T }) {
         <div className="serif glowText" style={{ fontSize: 46, fontWeight: 700, color: T.accent, lineHeight: 1.05, margin: "6px 0 2px" }}>{days}</div>
         <div className="serif" style={{ fontSize: 17, fontWeight: 600, color: T.gold }}>days unbroken</div>
         <div style={{ fontSize: 11.5, color: T.mut, marginTop: 10, maxWidth: 210, lineHeight: 1.5 }}>Both of you, every day. That is the hard part done.</div>
+      </div>
+    </button>
+  );
+}
+
+/* ================================================================
+   LRDI TOPIC ROW — a name, a note button, and a run of numbered
+   video-chips. Gap chips (missing videos) render disabled.
+   ================================================================ */
+function TopicChipRow({ topic, state, onToggle, onNote, T }) {
+  const chipIds = Array.from({ length: topic.count }, (_, i) => `${topic.id}-${i + 1}`);
+  const realIds = chipIds.filter((id) => FULL_ITEM_BY_ID[id]);
+  const doneN = realIds.filter((id) => !!(state.items[id] || {}).v).length;
+  const allDone = realIds.length > 0 && doneN === realIds.length;
+  const hasNote = !!(state.notes || {})[topic.id];
+
+  return (
+    <div className={allDone ? "completed-pop" : ""} style={{ padding: "10px 10px 11px", borderRadius: 13, background: allDone ? `linear-gradient(90deg, ${T.card2}, ${T.card})` : "transparent", border: `1px solid ${allDone ? T.gold + "55" : "transparent"}` }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+        <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: 600, color: allDone ? T.gold : T.ink }}>{topic.name}</span>
+        <span style={{ fontSize: 10.5, color: T.dim, flexShrink: 0 }}>{doneN}/{realIds.length}</span>
+        <button onClick={() => onNote(topic.id)} aria-label="concept note" style={{ width: 24, height: 24, borderRadius: 8, border: "none", background: "transparent", display: "grid", placeItems: "center", flexShrink: 0 }}>
+          {Icon.note(hasNote ? T.gold : T.line, 13)}
+        </button>
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {chipIds.map((id, i) => {
+          const real = !!FULL_ITEM_BY_ID[id];
+          const on = real && !!(state.items[id] || {}).v;
+          return (
+            <button key={id} disabled={!real} onClick={() => real && onToggle(id, "v")}
+              style={{
+                width: 30, height: 30, borderRadius: 9, fontSize: 11.5, fontWeight: 700,
+                border: `1.5px solid ${!real ? T.line : on ? T.accent : T.line}`,
+                background: !real ? "transparent" : on ? `linear-gradient(135deg, ${T.accent}, ${T.accent2})` : T.card2,
+                color: !real ? T.dim : on ? T.onAccent : T.mut,
+                opacity: !real ? 0.35 : 1, boxShadow: on ? `0 0 8px ${T.accent}44` : "none",
+                textDecoration: !real ? "line-through" : "none",
+              }}>
+              {i + 1}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ================================================================
+   NOTE MARKDOWN RENDERER
+   A small, purpose-built renderer for the class-notes format: a title
+   line, an italic subtitle, ## section headers, --- dividers, numbered
+   bold-lead points, and pipe tables. Falls through to plain paragraphs
+   for anything else, so a short hand-typed Quant note (no markdown at
+   all) still renders correctly through the same path.
+   ================================================================ */
+function renderNoteMarkdown(text, T) {
+  const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
+  const blocks = [];
+  let i = 0;
+  let key = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    if (!line.trim()) { i++; continue; }
+
+    // horizontal rule
+    if (/^-{3,}$/.test(line.trim())) { blocks.push(<div key={key++} style={{ height: 1, background: T.line, margin: "14px 0" }} />); i++; continue; }
+
+    // title (# )
+    if (/^#\s+/.test(line)) {
+      blocks.push(<div key={key++} className="serif" style={{ fontSize: 19, fontWeight: 600, color: T.ink, marginBottom: 2 }}>{line.replace(/^#\s+/, "")}</div>);
+      i++; continue;
+    }
+    // section header (## with optional emoji)
+    if (/^##\s+/.test(line)) {
+      blocks.push(<div key={key++} style={{ fontSize: 11, letterSpacing: "0.1em", fontWeight: 700, color: T.gold, marginTop: 18, marginBottom: 9 }}>{line.replace(/^##\s+/, "").toUpperCase()}</div>);
+      i++; continue;
+    }
+    // italic subtitle line (*...*), full line
+    if (/^\*[^*].*\*$/.test(line.trim())) {
+      blocks.push(<div key={key++} style={{ fontSize: 12, color: T.mut, fontStyle: "italic", lineHeight: 1.5, marginBottom: 8 }}>{line.trim().slice(1, -1)}</div>);
+      i++; continue;
+    }
+
+    // table block: consecutive lines starting with |
+    if (line.trim().startsWith("|")) {
+      const rows = [];
+      while (i < lines.length && lines[i].trim().startsWith("|")) {
+        const cells = lines[i].trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+        if (!/^:?-+:?$/.test(cells.join(""))) rows.push(cells);
+        i++;
+      }
+      const [head, ...body] = rows;
+      blocks.push(
+        <div key={key++} style={{ overflowX: "auto", margin: "10px 0", borderRadius: 10, border: `1px solid ${T.line}` }}>
+          <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12 }}>
+            <thead><tr>{head.map((c, ci) => <th key={ci} style={{ textAlign: "left", padding: "8px 10px", background: T.card2, color: T.gold, fontWeight: 700, fontSize: 10.5, letterSpacing: "0.03em", whiteSpace: "nowrap", borderBottom: `1px solid ${T.line}` }}>{inline(c, T)}</th>)}</tr></thead>
+            <tbody>{body.map((r, ri) => (
+              <tr key={ri} style={{ borderTop: `1px solid ${T.line}` }}>
+                {r.map((c, ci) => <td key={ci} style={{ padding: "7px 10px", color: T.ink, lineHeight: 1.45 }}>{inline(c, T)}</td>)}
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      );
+      continue;
+    }
+
+    // numbered bold-lead point: "**1. Something.** rest of sentence"
+    const numMatch = line.match(/^\s*\*\*(\d+)\.\s*(.+?)\*\*\s*(.*)$/);
+    if (numMatch) {
+      blocks.push(
+        <div key={key++} style={{ display: "flex", gap: 9, marginBottom: 11 }}>
+          <span style={{ fontSize: 12.5, fontWeight: 700, color: T.accent, flexShrink: 0 }}>{numMatch[1]}.</span>
+          <div style={{ fontSize: 13, lineHeight: 1.6, color: T.ink }}>
+            <span style={{ fontWeight: 700, color: T.ink }}>{inline(numMatch[2], T)}</span>{numMatch[3] ? <> {inline(numMatch[3], T)}</> : null}
+          </div>
+        </div>
+      );
+      i++; continue;
+    }
+
+    // plain paragraph — collect contiguous non-empty, non-special lines
+    const para = [line];
+    i++;
+    while (i < lines.length && lines[i].trim() && !/^(#|-{3,}|\|)/.test(lines[i].trim()) && !/^\s*\*\*\d+\./.test(lines[i])) {
+      para.push(lines[i]); i++;
+    }
+    blocks.push(<div key={key++} style={{ fontSize: 13, lineHeight: 1.65, color: T.ink, marginBottom: 10 }}>{inline(para.join(" "), T)}</div>);
+  }
+  return blocks;
+
+  function inline(str, T) {
+    // bold (**x**) only — kept intentionally minimal
+    const parts = String(str).split(/(\*\*[^*]+\*\*)/g);
+    return parts.map((p, idx) => /^\*\*[^*]+\*\*$/.test(p)
+      ? <b key={idx} style={{ color: T.ink, fontWeight: 700 }}>{p.slice(2, -2)}</b>
+      : <span key={idx}>{p}</span>);
+  }
+}
+
+/* ---------------- Whole-section celebration (the "huge" tier) ----------------
+   Finishing an entire section — all of Arithmetic, all of Logic, etc. Same
+   family of animation as the mini cluster burst, scaled up: more particles,
+   more rings, a full-screen gradient rather than a dimmed card, and it runs
+   longer. Deliberately outranks the mini burst rather than stacking with it. */
+function SectionCelebration({ data, onDone, T }) {
+  useEffect(() => { const t = setTimeout(onDone, 4200); return () => clearTimeout(t); }, []);
+
+  const COUNT = 70;
+  const particles = Array.from({ length: COUNT }, (_, i) => {
+    const ring = i % 4;
+    const angle = (360 / COUNT) * i * 3.4 + ring * 11;
+    const dist = 90 + ring * 55 + (i % 5) * 10;
+    const size = ring === 3 ? 3 : ring === 0 ? 8 : 5;
+    const delay = ring * 70 + (i % 6) * 26;
+    const dur = 1500 + ring * 320;
+    const rad = (angle * Math.PI) / 180;
+    return { x: Math.cos(rad) * dist, y: Math.sin(rad) * dist, size, delay, dur, color: i % 3 === 0 ? T.gold : i % 3 === 1 ? T.accent : T.accent2 };
+  });
+
+  return (
+    <button onClick={onDone} aria-label="dismiss" style={{
+      position: "fixed", inset: 0, zIndex: 95, border: "none", cursor: "pointer",
+      background: T.light
+        ? `radial-gradient(1200px 700px at 50% 30%, ${T.card} 0%, ${T.field} 70%)`
+        : `radial-gradient(1200px 700px at 50% 30%, #241a12 0%, #0a0705 75%)`,
+      display: "grid", placeItems: "center", padding: 20, overflow: "hidden",
+    }}>
+      <style>{`
+        @keyframes sectionBurst { 0%{ transform: translate(0,0) scale(.3); opacity:0 } 14%{ opacity:1 } 100%{ transform: translate(var(--dx), var(--dy)) scale(1); opacity:0 } }
+        @keyframes sectionRing { 0%{ transform: scale(.5); opacity:0 } 25%{ opacity:.8 } 100%{ transform: scale(2.6); opacity:0 } }
+        @keyframes sectionCardIn { 0%{ transform: scale(.85) translateY(10px); opacity:0 } 55%{ transform: scale(1.03); opacity:1 } 100%{ transform: scale(1) translateY(0); opacity:1 } }
+        @keyframes sectionGlow { 0%,100%{ opacity:.55 } 50%{ opacity:1 } }
+        @media (prefers-reduced-motion: reduce) { .section-particle, .section-ring { animation: none !important; opacity:0 !important } }
+      `}</style>
+
+      <div style={{ position: "relative", width: 1, height: 1 }}>
+        {[0, 1, 2].map((r) => (
+          <div key={r} className="section-ring" style={{
+            position: "absolute", left: -(90 + r * 40), top: -(90 + r * 40), width: (90 + r * 40) * 2, height: (90 + r * 40) * 2,
+            borderRadius: "50%", border: `2px solid ${r === 1 ? T.gold : T.accent}`,
+            animation: `sectionRing ${1.8 + r * 0.3}s ease-out ${r * 160}ms forwards`,
+          }} />
+        ))}
+        {particles.map((p, i) => (
+          <div key={i} className="section-particle" style={{
+            position: "absolute", left: -p.size / 2, top: -p.size / 2, width: p.size, height: p.size,
+            borderRadius: "50%", background: p.color, boxShadow: `0 0 14px ${p.color}`,
+            "--dx": `${p.x}px`, "--dy": `${p.y}px`,
+            animation: `sectionBurst ${p.dur}ms cubic-bezier(.16,.7,.3,1) ${p.delay}ms forwards`,
+          }} />
+        ))}
+      </div>
+
+      <div style={{ position: "relative", textAlign: "center", animation: "sectionCardIn .7s cubic-bezier(.2,.8,.3,1) forwards" }}>
+        <div style={{ fontSize: 11, letterSpacing: "0.3em", color: T.gold, fontWeight: 700, animation: "sectionGlow 2s ease-in-out infinite" }}>SECTION COMPLETE</div>
+        <div className="serif" style={{ fontSize: 40, fontWeight: 700, color: T.ink, margin: "14px 0 6px", lineHeight: 1.08, textShadow: `0 0 40px ${T.accent}88` }}>
+          {data.name}
+        </div>
+        <div style={{ fontSize: 13.5, color: T.mut, fontWeight: 500, marginTop: 10 }}>Every class, every set — done.</div>
+        <div style={{
+          marginTop: 26, display: "inline-block", padding: "13px 30px", borderRadius: 99,
+          background: `linear-gradient(90deg, ${T.accent}, ${T.accent2})`, color: T.onAccent,
+          fontSize: 13, fontWeight: 700, boxShadow: `0 0 30px ${T.accent}55`,
+        }}>Onward</div>
       </div>
     </button>
   );

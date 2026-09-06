@@ -30,6 +30,7 @@ function mergeState(remote, local) {
   const [items, itemsMeta] = mergeStamped(remote.items, local.items, rMeta.items || {}, lMeta.items || {});
   const [flags, flagsMeta] = mergeStamped(remote.flags, local.flags, rMeta.flags || {}, lMeta.flags || {});
   const [celebrated, celebratedMeta] = mergeStamped(remote.celebrated, local.celebrated, rMeta.celebrated || {}, lMeta.celebrated || {});
+  const [sectionCelebrated, sectionCelebratedMeta] = mergeStamped(remote.sectionCelebrated, local.sectionCelebrated, rMeta.sectionCelebrated || {}, lMeta.sectionCelebrated || {});
   const [qbStars, qbStarsMeta] = mergeStamped(remote.qbStars, local.qbStars, rMeta.qbStars || {}, lMeta.qbStars || {});
   const [sched, schedMeta] = mergeStamped(remote.sched, local.sched, rMeta.sched || {}, lMeta.sched || {});
   const [notes, notesMeta] = mergeStamped(remote.notes, local.notes, rMeta.notes || {}, lMeta.notes || {});
@@ -52,12 +53,12 @@ function mergeState(remote, local) {
   const mocks = [...mockMap.values()];
 
   return {
-    items, flags, celebrated, qbStars, sched, notes, habits, habitLog, mocks, log,
+    items, flags, celebrated, sectionCelebrated, qbStars, sched, notes, habits, habitLog, mocks, log,
     settings: (newerLocal("settings") ? local.settings : remote.settings) || local.settings || remote.settings,
     digest: newerLocal("digest") ? (local.digest ?? "") : (remote.digest ?? ""),
     digestDate: newerLocal("digest") ? (local.digestDate ?? "") : (remote.digestDate ?? ""),
     meta: {
-      items: itemsMeta, flags: flagsMeta, celebrated: celebratedMeta, qbStars: qbStarsMeta, sched: schedMeta, notes: notesMeta, habits: habitsMeta, habitLog: habitLogMeta,
+      items: itemsMeta, flags: flagsMeta, celebrated: celebratedMeta, sectionCelebrated: sectionCelebratedMeta, qbStars: qbStarsMeta, sched: schedMeta, notes: notesMeta, habits: habitsMeta, habitLog: habitLogMeta,
       settings: Math.max(rMeta.settings || 0, lMeta.settings || 0),
       mocks: Math.max(rMeta.mocks || 0, lMeta.mocks || 0),
       digest: Math.max(rMeta.digest || 0, lMeta.digest || 0),
