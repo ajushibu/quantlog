@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { api, getCode, setCode, clearCode, fetchPhotoUrl } from "@/lib/api";
 import { THEMES, THEME_KEY } from "@/lib/themes";
 import { SECTIONS, ALL_ITEMS, ITEM_BY_ID, CLASSIFY_LIST, LRDI_TOPICS } from "@/lib/syllabus";
+import { LRDI_NOTES } from "@/lib/lrdiNotes";
 
 /* LRDI has no classes/sets — each topic is a run of numbered video-chips.
    We synthesise "items" for them (one per real chip, kind "v") and give the
@@ -244,22 +245,6 @@ function streakDays(state) {
   return n;
 }
 
-function compressImage(file, maxDim = 1000, quality = 0.72) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-    img.onload = () => {
-      const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
-      const c = document.createElement("canvas");
-      c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
-      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
-      URL.revokeObjectURL(url);
-      resolve(c.toDataURL("image/jpeg", quality));
-    };
-    img.onerror = reject;
-    img.src = url;
-  });
-}
 
 /* Real PDF, not HTML-renamed-to-.doc (which iOS shows as raw markup).
    Text and photos are laid out in order, paginated, so a question that has
@@ -678,6 +663,7 @@ function Study({ state, persist, struggles, setStruggles, now, T }) {
   const [openBank, setOpenBank] = useState(null);         // { topicId, name, questions } | null
   const [bankLoading, setBankLoading] = useState(false);
   const [noteFor, setNoteFor] = useState(null);
+  const [docView, setDocView] = useState(null);
   const bankCache = useRef({});
   useEffect(() => { api.listBanks().then((r) => setBankTopics(r.topics || [])).catch(() => {}); }, []);
 
@@ -799,16 +785,16 @@ function Study({ state, persist, struggles, setStruggles, now, T }) {
         })}
       </div>
 
-      {areaSections(area).map((s) => <SectionCard key={s.id} s={s} state={state} onToggle={toggle} onFlag={toggleFlag} bankTopics={bankTopics} onOpenBank={showBank} onNote={setNoteFor} T={T} />)}
+      {areaSections(area).map((s) => <SectionCard key={s.id} s={s} state={state} onToggle={toggle} onFlag={toggleFlag} bankTopics={bankTopics} onOpenBank={showBank} onNote={setNoteFor} onDoc={setDocView} T={T} />)}
       {bankLoading && <div style={{ position: "fixed", inset: 0, zIndex: 60, background: T.light ? "rgba(60,45,50,.35)" : "rgba(8,6,4,.6)", display: "grid", placeItems: "center", color: T.mut, fontSize: 13 }}>Opening bank…</div>}
       {openBank && <BankView bank={openBank} state={state} stars={state.qbStars || {}} onStar={starQuestion} onUnstar={unstarQuestion} onNote={setNoteFor} onClose={() => setOpenBank(null)} T={T} />}
       {noteFor && <NoteSheet topicId={noteFor} state={state} persist={persist} onClose={() => setNoteFor(null)} T={T} />}
-      <StruggleBox state={state} persist={persist} struggles={struggles} setStruggles={setStruggles} today={today} T={T} />
+      {docView && <ClassDocView doc={docView} onClose={() => setDocView(null)} T={T} />}
     </>
   );
 }
 
-function SectionCard({ s, state, onToggle, onFlag, bankTopics, onOpenBank, onNote, T }) {
+function SectionCard({ s, state, onToggle, onFlag, bankTopics, onOpenBank, onNote, onDoc, T }) {
   const [open, setOpen] = useState(s.id === "arith" || s.id === "varc");
   const st = sectionStats(state, s);
   return (
@@ -824,7 +810,7 @@ function SectionCard({ s, state, onToggle, onFlag, bankTopics, onOpenBank, onNot
       {open && (
         <div style={{ padding: "0 12px 12px", display: "flex", flexDirection: "column", gap: 5 }}>
           {s.id === "lrdi"
-            ? LRDI_TOPICS.map((t) => <TopicChipRow key={t.id} topic={t} state={state} onToggle={onToggle} onNote={onNote} T={T} />)
+            ? LRDI_TOPICS.map((t) => <TopicChipRow key={t.id} topic={t} state={state} onToggle={onToggle} onNote={onNote} onDoc={onDoc} T={T} />)
             : s.items.map((it) => it.kind === "s"
               ? <SetRow key={it.id} it={it} state={state} onToggle={onToggle} onFlag={onFlag} hasBank={(bankTopics || []).includes(it.id)} onOpenBank={onOpenBank} onNote={onNote} T={T} />
               : <ClassRow key={it.id} it={it} state={state} onToggle={onToggle} onFlag={onFlag} T={T} />)}
@@ -900,113 +886,6 @@ function SetRow({ it, state, onToggle, onFlag, hasBank, onOpenBank, onNote, T })
 /* ---------------- Struggle box ---------------- */
 const TOPIC_MEMORY_KEY = "catlog_last_topic";
 
-function StruggleBox({ state, persist, struggles, setStruggles, today, T }) {
-  const [text, setText] = useState("");
-  // topic sticks between filings — she works through one topic at a time,
-  // so re-picking it for every question is pure friction
-  const [topicId, setTopicId] = useState(() => {
-    if (typeof window === "undefined") return "";
-    const saved = localStorage.getItem(TOPIC_MEMORY_KEY);
-    return saved && TOPIC_OPTION_BY_ID[saved] ? saved : "";
-  });
-  const chooseTopic = (id) => { setTopicId(id); if (id) localStorage.setItem(TOPIC_MEMORY_KEY, id); };
-  const [ansText, setAnsText] = useState("");
-  const [photo, setPhoto] = useState(null);
-  const [ansPhoto, setAnsPhoto] = useState(null);
-  const [showAns, setShowAns] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
-  const fileRef = useRef(); const ansRef = useRef();
-
-  const pick = async (e, setter) => {
-    const f = e.target.files?.[0]; if (!f) return;
-    try { setter(await compressImage(f)); } catch { setMsg("Couldn't read that image"); }
-    e.target.value = "";
-  };
-
-  const submit = async () => {
-    if (!text.trim() && !photo) return;
-    if (!topicId) { setMsg("Pick a topic first"); setTimeout(() => setMsg(""), 2500); return; }
-    setBusy(true); setMsg("");
-    const id = uid();
-    try {
-      if (photo) await api.uploadPhoto(id, photo);
-      if (ansPhoto) await api.uploadPhoto(`${id}-ans`, ansPhoto);
-      const entry = { id, text: text.trim(), topicId, date: today, hasPhoto: !!photo, hasAnsPhoto: !!ansPhoto, answerText: ansText.trim() };
-      await api.createStruggle(entry);
-      // hand-filed questions default to the medium gap
-      await persist(stampItem({ ...state, sched: { ...state.sched, [id]: { p: 2, lapses: 0, due: addDays(today, FIRST_GAP[2]) } } }, "sched", id));
-      setStruggles([...struggles, { ...entry, retired: false, lastTried: null, keepCount: 0 }]);
-      await persist({ ...state, log: [...state.log, { date: today, type: "struggle" }] });
-      setMsg(`Filed under ${topicName(topicId)}`);
-    } catch (e) { console.error(e); setMsg("Couldn't save — try again"); }
-    setText(""); setAnsText(""); setPhoto(null); setAnsPhoto(null); setShowAns(false); setBusy(false);
-    setTimeout(() => setMsg(""), 4000);
-  };
-
-  const inputStyle = { width: "100%", background: T.field, border: `1px solid ${T.line}`, borderRadius: 13, padding: 13, fontSize: 13.5, color: T.ink, outline: "none", resize: "none" };
-
-  return (
-    <div className="card" style={{ padding: 20 }}>
-      <div className="serif" style={{ fontSize: 17, fontWeight: 600 }}>Stuck on a question?</div>
-      <div style={{ fontSize: 12, color: T.mut, margin: "3px 0 12px" }}>Type it or photograph it, pick the topic once, then file as many as you like.</div>
-
-      <div style={{ marginBottom: 10 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
-          <span style={{ fontSize: 9.5, letterSpacing: "0.12em", color: T.dim, fontWeight: 700 }}>TOPIC</span>
-          {topicId && <span style={{ fontSize: 10, color: T.dim }}>stays selected for the next one</span>}
-        </div>
-        <select value={topicId} onChange={(e) => chooseTopic(e.target.value)} style={{
-          width: "100%", background: T.field, border: `1px solid ${topicId ? T.accent + "66" : T.line}`,
-          borderRadius: 12, padding: "12px 10px", fontSize: 13.5, color: topicId ? T.ink : T.dim,
-          outline: "none", fontWeight: topicId ? 600 : 400,
-        }}>
-          <option value="">Choose a topic…</option>
-          {SECTIONS.map((sec) => {
-            const opts = TOPIC_OPTIONS.filter((t) => t.sectionId === sec.id);
-            if (!opts.length) return null;
-            return (
-              <optgroup key={sec.id} label={sec.name}>
-                {opts.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-              </optgroup>
-            );
-          })}
-        </select>
-      </div>
-
-      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} placeholder="e.g. Q14, page 87 — why LCM here?" style={inputStyle} />
-      {photo && (
-        <div style={{ position: "relative", display: "inline-block", marginTop: 10 }}>
-          <img src={photo} alt="question" style={{ height: 96, borderRadius: 12, border: `1px solid ${T.line}` }} />
-          <button onClick={() => setPhoto(null)} style={{ position: "absolute", top: -8, right: -8, width: 22, height: 22, borderRadius: "50%", background: T.card2, border: `1px solid ${T.line}`, color: T.mut, fontSize: 11 }}>×</button>
-        </div>
-      )}
-      {showAns && (
-        <div style={{ marginTop: 10, padding: 12, background: T.field, borderRadius: 13, border: `1px dashed ${T.line}` }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: T.dim, letterSpacing: "0.1em", marginBottom: 7 }}>ANSWER — OPTIONAL</div>
-          <input value={ansText} onChange={(e) => setAnsText(e.target.value)} placeholder="e.g. Option B / 42" style={{ ...inputStyle, background: T.card2, padding: 10 }} />
-          {ansPhoto && (
-            <div style={{ position: "relative", display: "inline-block", marginTop: 8 }}>
-              <img src={ansPhoto} alt="answer" style={{ height: 64, borderRadius: 10, border: `1px solid ${T.line}` }} />
-              <button onClick={() => setAnsPhoto(null)} style={{ position: "absolute", top: -7, right: -7, width: 20, height: 20, borderRadius: "50%", background: T.card2, border: `1px solid ${T.line}`, color: T.mut, fontSize: 10 }}>×</button>
-            </div>
-          )}
-          <button onClick={() => ansRef.current.click()} style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, background: "none", border: "none", fontSize: 11.5, fontWeight: 700, color: T.accent, padding: 0 }}>{Icon.camera(T.accent)} photo of the solution</button>
-        </div>
-      )}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <button onClick={() => fileRef.current.click()} style={{ display: "flex", alignItems: "center", gap: 7, background: T.card2, border: `1px solid ${T.line}`, borderRadius: 11, padding: "8px 12px", fontSize: 12, fontWeight: 600, color: T.mut }}>{Icon.camera(T.mut)} Photo</button>
-          {!showAns && <button onClick={() => setShowAns(true)} style={{ background: "none", border: "none", fontSize: 12, fontWeight: 600, color: T.dim }}>+ answer</button>}
-          <span style={{ fontSize: 12, fontWeight: 600, color: T.accent }}>{msg}</span>
-        </div>
-        <button onClick={submit} disabled={busy || !topicId || (!text.trim() && !photo)} style={{ background: `linear-gradient(90deg, ${T.accent}, ${T.accent2})`, border: "none", borderRadius: 12, padding: "10px 20px", fontSize: 12.5, fontWeight: 700, color: T.onAccent, opacity: busy || !topicId || (!text.trim() && !photo) ? 0.4 : 1, boxShadow: `0 0 18px ${T.accent}44` }}>{busy ? "Filing" : "File it"}</button>
-      </div>
-      <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => pick(e, setPhoto)} />
-      <input ref={ansRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => pick(e, setAnsPhoto)} />
-    </div>
-  );
-}
 
 /* ================================================================
    REVISION
@@ -1167,6 +1046,7 @@ function Revision({ struggles, setStruggles, state, persist, now, T }) {
 
       {tour && <Tutorial onClose={() => setTour(false)} T={T} />}
       {noteFor && <NoteSheet topicId={noteFor} state={state} persist={persist} onClose={() => setNoteFor(null)} T={T} />}
+      {docView && <ClassDocView doc={docView} onClose={() => setDocView(null)} T={T} />}
 
       <NotesOverview state={state} onNote={setNoteFor} T={T} />
 
@@ -2458,7 +2338,8 @@ function HabitMilestone({ days, onClose, T }) {
    LRDI TOPIC ROW — a name, a note button, and a run of numbered
    video-chips. Gap chips (missing videos) render disabled.
    ================================================================ */
-function TopicChipRow({ topic, state, onToggle, onNote, T }) {
+function TopicChipRow({ topic, state, onToggle, onNote, onDoc, T }) {
+  const docs = LRDI_NOTES[topic.id];
   const chipIds = Array.from({ length: topic.count }, (_, i) => `${topic.id}-${i + 1}`);
   const realIds = chipIds.filter((id) => FULL_ITEM_BY_ID[id]);
   const doneN = realIds.filter((id) => !!(state.items[id] || {}).v).length;
@@ -2470,10 +2351,23 @@ function TopicChipRow({ topic, state, onToggle, onNote, T }) {
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
         <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: 600, color: allDone ? T.gold : T.ink }}>{topic.name}</span>
         <span style={{ fontSize: 10.5, color: T.dim, flexShrink: 0 }}>{doneN}/{realIds.length}</span>
-        <button onClick={() => onNote(topic.id)} aria-label="concept note" style={{ width: 24, height: 24, borderRadius: 8, border: "none", background: "transparent", display: "grid", placeItems: "center", flexShrink: 0 }}>
+        <button onClick={() => onNote(topic.id)} aria-label="my notes" style={{ width: 24, height: 24, borderRadius: 8, border: "none", background: "transparent", display: "grid", placeItems: "center", flexShrink: 0 }}>
           {Icon.note(hasNote ? T.gold : T.line, 13)}
         </button>
       </div>
+
+      {docs && (
+        <div style={{ display: "flex", gap: 6, marginBottom: 9 }}>
+          <button onClick={() => onDoc({ topicId: topic.id, kind: "pre", name: topic.name })}
+            style={{ flex: 1, background: T.card2, border: `1px solid ${T.line}`, borderRadius: 10, padding: "8px 10px", fontSize: 11, fontWeight: 700, color: T.accent, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+            {Icon.note(T.accent, 11)} Pre-class
+          </button>
+          <button onClick={() => onDoc({ topicId: topic.id, kind: "post", name: topic.name })}
+            style={{ flex: 1, background: T.card2, border: `1px solid ${T.line}`, borderRadius: 10, padding: "8px 10px", fontSize: 11, fontWeight: 700, color: T.gold, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+            {Icon.note(T.gold, 11)} Post-class
+          </button>
+        </div>
+      )}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
         {chipIds.map((id, i) => {
           const real = !!FULL_ITEM_BY_ID[id];
@@ -2573,10 +2467,50 @@ function renderNoteMarkdown(text, T) {
       i++; continue;
     }
 
+    // bullet list
+    if (/^\s*[-•]\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\s*[-•]\s+/.test(lines[i])) {
+        items.push(lines[i].replace(/^\s*[-•]\s+/, "")); i++;
+      }
+      blocks.push(
+        <ul key={key++} style={{ margin: "4px 0 12px", paddingLeft: 18, display: "flex", flexDirection: "column", gap: 5 }}>
+          {items.map((it, ii) => <li key={ii} style={{ fontSize: 13, lineHeight: 1.6, color: T.ink }}>{inline(it, T)}</li>)}
+        </ul>
+      );
+      continue;
+    }
+
+    // "**Label:**" lead-in line (used as mini sub-headings in the notes)
+    const leadMatch = line.match(/^\s*\*\*(.+?):\*\*\s*(.*)$/);
+    if (leadMatch) {
+      blocks.push(
+        <div key={key++} style={{ fontSize: 12.5, fontWeight: 700, color: T.accent, marginTop: 14, marginBottom: 6 }}>
+          {leadMatch[1]}
+          {leadMatch[2] ? <span style={{ color: T.ink, fontWeight: 400 }}> {inline(leadMatch[2], T)}</span> : null}
+        </div>
+      );
+      i++; continue;
+    }
+
+    // numbered plain list ("1. text" without bold)
+    if (/^\s*\d+\.\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
+        items.push(lines[i].replace(/^\s*\d+\.\s+/, "")); i++;
+      }
+      blocks.push(
+        <ol key={key++} style={{ margin: "4px 0 12px", paddingLeft: 20, display: "flex", flexDirection: "column", gap: 5 }}>
+          {items.map((it, ii) => <li key={ii} style={{ fontSize: 13, lineHeight: 1.6, color: T.ink }}>{inline(it, T)}</li>)}
+        </ol>
+      );
+      continue;
+    }
+
     // plain paragraph — collect contiguous non-empty, non-special lines
     const para = [line];
     i++;
-    while (i < lines.length && lines[i].trim() && !/^(#|-{3,}|\|)/.test(lines[i].trim()) && !/^\s*\*\*\d+\./.test(lines[i])) {
+    while (i < lines.length && lines[i].trim() && !/^(#|-{3,}|\||[-•]\s)/.test(lines[i].trim()) && !/^\s*\*\*\d+\./.test(lines[i]) && !/^\s*\d+\.\s/.test(lines[i]) && !/^\s*\*\*.+?:\*\*/.test(lines[i])) {
       para.push(lines[i]); i++;
     }
     blocks.push(<div key={key++} style={{ fontSize: 13, lineHeight: 1.65, color: T.ink, marginBottom: 10 }}>{inline(para.join(" "), T)}</div>);
@@ -2584,11 +2518,12 @@ function renderNoteMarkdown(text, T) {
   return blocks;
 
   function inline(str, T) {
-    // bold (**x**) only — kept intentionally minimal
-    const parts = String(str).split(/(\*\*[^*]+\*\*)/g);
-    return parts.map((p, idx) => /^\*\*[^*]+\*\*$/.test(p)
-      ? <b key={idx} style={{ color: T.ink, fontWeight: 700 }}>{p.slice(2, -2)}</b>
-      : <span key={idx}>{p}</span>);
+    const parts = String(str).split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g);
+    return parts.map((p, idx) => {
+      if (/^\*\*[^*]+\*\*$/.test(p)) return <b key={idx} style={{ color: T.ink, fontWeight: 700 }}>{p.slice(2, -2)}</b>;
+      if (/^\*[^*]+\*$/.test(p)) return <i key={idx} style={{ color: T.gold, fontStyle: "italic" }}>{p.slice(1, -1)}</i>;
+      return <span key={idx}>{p}</span>;
+    });
   }
 }
 
@@ -2659,5 +2594,57 @@ function SectionCelebration({ data, onDone, T }) {
         }}>Onward</div>
       </div>
     </button>
+  );
+}
+
+/* ================================================================
+   CLASS DOC VIEWER — the pre/post documents that ship with the app.
+   Read-only: these are authored notes, not something to edit on a
+   phone. Toggle between the two without closing.
+   ================================================================ */
+function ClassDocView({ doc, onClose, T }) {
+  const [kind, setKind] = useState(doc.kind);
+  const docs = LRDI_NOTES[doc.topicId] || {};
+  const body = docs[kind] || "";
+
+  useEffect(() => {
+    const onKey = (e) => e.key === "Escape" && onClose();
+    document.addEventListener("keydown", onKey);
+    document.body.style.overflow = "hidden";
+    return () => { document.removeEventListener("keydown", onKey); document.body.style.overflow = ""; };
+  }, []);
+
+  const tab = (k, label, color) => (
+    <button onClick={() => setKind(k)} style={{
+      flex: 1, padding: "9px 0", borderRadius: 10, border: "none",
+      background: kind === k ? T.card2 : "transparent",
+      color: kind === k ? color : T.mut, fontSize: 12, fontWeight: 700,
+    }}>{label}</button>
+  );
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 78, background: T.bgGrad, display: "flex", flexDirection: "column" }}>
+      <div style={{ padding: "16px 18px 10px", borderTop: "none", flexShrink: 0, paddingTop: "calc(16px + env(safe-area-inset-top))" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 9.5, letterSpacing: "0.16em", color: T.dim, fontWeight: 700 }}>LOGIC</div>
+            <div className="serif" style={{ fontSize: 19, fontWeight: 600, color: T.ink, marginTop: 2 }}>{doc.name}</div>
+          </div>
+          <button onClick={onClose} style={{ background: T.card2, border: `1px solid ${T.line}`, borderRadius: 99, padding: "8px 16px", fontSize: 12, fontWeight: 700, color: T.mut, flexShrink: 0 }}>Close</button>
+        </div>
+        <div style={{ display: "flex", gap: 4, background: T.field, border: `1px solid ${T.line}`, borderRadius: 13, padding: 4 }}>
+          {tab("pre", "Before class", T.accent)}
+          {tab("post", "Revision sheet", T.gold)}
+        </div>
+      </div>
+
+      <div style={{ flex: 1, overflowY: "auto", padding: "8px 18px 60px", WebkitOverflowScrolling: "touch" }}>
+        {body ? renderNoteMarkdown(body, T) : (
+          <div style={{ fontSize: 13, color: T.mut, marginTop: 20, lineHeight: 1.6 }}>
+            This document hasn't been written for {doc.name} yet.
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
