@@ -17,15 +17,91 @@ export const SECTIONS = [
     ["c","Basics of Time and Work"],["c","Work with Units & Alternate Work"],["c","Efficiency"],["c","Negative Work"],["s","Time and Work"],
     ["c","TSD Basics"],["c","Average Speed"],["c","Relative Speed"],["c","Boats & Streams"],["c","Linear Races"],["c","Circular Tracks"],["s","Time, Speed and Distance"],
   ]),
-  S("algebra", "Algebra", [
-    ["c","Linear Equations"],["c","Polynomial Theory"],["c","Quadratic Equations 1"],["c","Quadratic Equations 2"],
-    ["c","Quadratic Eq — Common Roots"],["c","Quadratic Eq — Max, Min & Inequalities"],
-    ["s","Quadratic and Other Equations"],["s","Inequalities"],
-    ["c","Functions 1"],["c","Functions 2"],["s","Functions"],
-    ["c","Sequence 1"],["c","Sequence 2"],["c","Arithmetic Progression"],["c","Sequence 3"],["c","Sequence 4"],["s","Progressions"],
-    ["c","Logarithms"],["s","Logarithms"],
-    ["c","Modulus & Graphs 1"],["c","Modulus 2"],["c","Modulus 3"],["c","Modulus 4"],["c","Modulus 5"],["c","Maxima & Minima"],
-  ]),
+  /* Algebra: rebuilt from Rodha's "Algebra for CAT 2027" playlist (101
+     videos) instead of the earlier placeholder class names. 6 videos
+     dropped as off-topic for this section (3 Statistics, 1 Number System,
+     2 Trigonometry-flavored practice videos mixed into the same playlist).
+     No practice-set checkpoints in this playlist, so — like VARC — it's
+     modeled as thematic groups over a flat class list rather than S(). */
+  {
+    id: "algebra", name: "Algebra", groups: [
+      { name: "Algebraic Identities", count: 6 },
+      { name: "Simple Equations", count: 6 },
+      { name: "Quadratic & Cubic Equations", count: 6 },
+      { name: "Inequalities", count: 9 },
+      { name: "Progressions (AP/GP)", count: 6 },
+      { name: "Indices & Surds", count: 5 },
+      { name: "Functions", count: 10 },
+      { name: "Graphs", count: 4 },
+      { name: "Logarithms", count: 1 },
+      { name: "Algebra Practice Sessions", count: 16 },
+      { name: "Advanced Mixed Practice", count: 20 },
+      { name: "Algebra Workshop (CAT 2022)", count: 6 },
+    ],
+    items: [
+      // Algebraic Identities (6)
+      "Algebraic Identities 1", "Algebraic Identities 2: Applications", "Algebraic Identities 3: Rationalization",
+      "Algebraic Identities 4: Exponential Equations", "Algebraic Identities 5: Standard Forms",
+      "Range of K and Exponents",
+      // Simple Equations (6)
+      "Simple Equations 1: Linear Equation Solutions", "Simple Equations 2: Integer Solutions",
+      "Simple Equations 3: Integral Solutions Shortcuts", "Simple Equations 4: Reciprocal Equations",
+      "Simple Equations 5: Digit-Based Problems", "Simple Equations 6: Reverse Order Strategy",
+      // Quadratic & Cubic Equations (6)
+      "Quadratic Equations 1: Fundamentals & Inequalities", "Quadratic Equations 2: Nature of Roots",
+      "Quadratic Equations 3: Imaginary & Common Roots", "Cubic Equations 1: Roots",
+      "Cubic Equations 2: Roots & Coefficients", "Quadratic Equations 4: Minimum Value",
+      // Inequalities (9)
+      "Inequalities 1: Rules & Applications", "Inequalities 2: Min/Max Sum Given Product",
+      "Inequalities 3: Sum of Number & Reciprocal", "Inequalities 4: AM-GM-HM Applications",
+      "Inequalities 5: AM-HM Applications", "Inequalities 6: Polynomial & Rational Inequalities",
+      "Inequalities 7: AM-GM for Minimum Value", "Inequalities 8: AM-HM Application",
+      "Inequalities 9: Rational Inequality & Quadratic Range",
+      // Progressions AP/GP (6)
+      "Arithmetic Progression 1: AP Average Funda", "Arithmetic Progression 2: Sum of an AP",
+      "Sequence & Series: Nth Term", "Geometric Progression 1: Basics",
+      "Geometric Progression 2: Three Numbers in GP", "Geometric Progression 3: Combined AP & GP",
+      // Indices & Surds (5)
+      "Indices & Surds 1: Comparing Surds (Constant Sum)", "Indices & Surds 2: Comparing Surds",
+      "Indices & Surds 3: Square Root of Surds", "Indices & Surds 4: Square Root of Surds (contd.)",
+      "Indices & Surds 5: Comparing Exponential Expressions",
+      // Functions (10)
+      "Functions 1: Domain, Range & Types", "Functions 2: Onto & Bijective Functions",
+      "Functions 3: Subset Counting & Functional Equations", "Functions 4: General Solutions",
+      "Functions 5: Composite & Even-Odd Functions", "Functions 6: Greatest Integer Function Series",
+      "Functions 7: Domain of Logarithmic Functions", "Functions 8: GIF & Log Remainders",
+      "Functions 9: AM-GM Inequality Application", "Functions 10: Functional Equations by Pattern",
+      // Graphs (4)
+      "Graphs 1: Basic Function Graphs", "Graphs 2: Modulus Graph Area",
+      "Graphs 3: Number of Solutions Graphically", "Graphs 4: Graphing Quadratic Equations",
+      // Logarithms (1)
+      "Logarithms: Logarithm Properties",
+      // Algebra Practice Sessions (16, sessions 9 & 15 don't exist in the playlist)
+      "Practice Session 1: AM-GM Inequality Application", "Practice Session 2: Exponents & Powers",
+      "Practice Session 3: Comparing Exponential Expressions", "Practice Session 4: Logarithmic & Quadratic Graphs",
+      "Practice Session 5: Symmetric Polynomial Equations", "Practice Session 6: Geometric Mean of GP",
+      "Practice Session 7: Domain of Logarithmic Functions", "Practice Session 8: Greatest Integer Function Logarithms",
+      "Practice Session 10: Range of Algebraic Functions", "Practice Session 11: Splitting Denominators Series",
+      "Practice Session 12: Sum of Squares Property", "Practice Session 13: Range of Rational Function",
+      "Practice Session 14: Logarithm Base Conversion", "Practice Session 16: Greatest Integer Function Sums",
+      "Practice Session 17: Greatest Integer Function Series", "Practice Session 18: Greatest Integer Function Equations",
+      // Advanced Mixed Practice (20)
+      "Quadratics: Roots & Coefficients", "Maxima-Minima: AM-GM With Quadratics",
+      "Quadratics: Advanced Inequalities", "Inequalities: AM-GM With Three Terms",
+      "Max-Min: Symmetric Expressions", "Logarithms & GP: Logs & Progressions",
+      "Logarithms & Series: Log-Series Equations", "Cubic Equations: Roots of Cubics",
+      "Logarithms: Tough Log Equations", "Indices & Surds: Exponential Equations",
+      "Logarithms: Product of Roots", "Inequalities: Factoring Higher Powers 1",
+      "Inequalities: Factoring Higher Powers 2", "Functions: Domain of Log Inequalities",
+      "Functions: Functional Equations f(x+y)", "Polynomials: Higher-Degree Roots",
+      "Equations: Linear, Quadratic & Cubic", "Series: Advanced Summation",
+      "Progressions: Product Series Simplification", "Advanced Practice: Symmetry (CAT 2024)",
+      // Algebra Workshop CAT 2022 (6)
+      "Workshop 1: Advanced Algebra Questions", "Workshop 2: Advanced Algebra Questions",
+      "Workshop 3: Advanced Algebra Questions", "Workshop 4: Advanced Algebra Questions",
+      "Workshop 5: Factorizing Degree-4 Equations", "Workshop 6: Multiple Roots, 2 Eq. 3 Variables",
+    ].map((name, i) => ({ id: `algebra-c${i}`, kind: "c", name })),
+  },
   S("geo", "Geometry", [
     ["c","Lines & Angles 1"],["c","Lines & Angles 2"],["c","Properties of Triangles"],["c","Similarity"],
     ["c","Quadrilaterals"],["c","Polygons"],["c","Circles 1"],["c","Circles 2"],
