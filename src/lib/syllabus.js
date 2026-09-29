@@ -184,8 +184,15 @@ export const LRDI_TOPICS = [
 export const DI_DAILY = [
   "10 min — arithmetic drill: % ↔ fractions, % change, approximation",
   "25–30 min — solve the set (timer on from week 3)",
-  "20 min — review: retry what you got wrong, then read the solution, then write the one deduction you missed",
+  "20 min — review: retry what you got wrong, then tap ▶ to watch the solution video, then write the one deduction you missed",
 ];
+
+
+/* GOAT CAT "All 114 DILR Sets Solved (CAT 2017–2024)" — matched by year,
+   slot and topic from the video titles. One number = a clear match. Several
+   = the set is one of those videos (the teacher names the set in the first
+   ~30 s). Empty = a 2025 set; the series stops at 2024. */
+export const DI_VIDEOS = {"di-w1-1": [10, 11, 12], "di-w1-2": [3, 4, 13], "di-w1-3": [5, 14, 15, 105], "di-w1-4": [10, 11, 12], "di-w1-5": [59], "di-w1-6": [10, 11, 12], "di-w2-1": [6, 99, 100, 101], "di-w2-2": [29, 30, 84], "di-w2-3": [113, 23, 79, 81], "di-w2-4": [113, 23, 79, 81], "di-w2-5": [32, 89, 90, 91], "di-w2-6": [], "di-w2-7": [5, 14, 15, 105], "di-w2-8": [53, 33, 95], "di-w3-1": [31, 85, 86, 87, 88], "di-w3-2": [46], "di-w3-3": [107, 110], "di-w3-4": [45], "di-w3-5": [52], "di-w3-6": [56], "di-w3-7": [55, 18], "di-w3-8": [], "di-w3-9": [22, 34, 77, 78, 111, 112], "di-w4-1": [50, 51], "di-w4-2": [], "di-w4-3": [55, 18], "di-w4-4": [58], "di-w4-5": [48, 49], "di-w4-6": [], "di-w4-7": [50, 51], "di-w4-8": [57], "di-w5-1": [], "di-w5-2": [], "di-w5-3": [71, 72, 73, 106], "di-w5-4": [107, 110], "di-w5-5": [114], "di-w5-6": [40, 42], "di-w5-7": [44], "di-w5-8": [31, 85, 86, 87, 88], "di-w6-1": [103, 1], "di-w6-2": [], "di-w6-3": [], "di-w6-4": [7, 8, 9, 102], "di-w6-5": [48, 49, 70], "di-w6-6": [33, 53, 95], "di-w6-7": [54, 96, 97, 109], "di-w6-8": [16, 17, 98]};
 
 export const DI_PLAN = [
   {
@@ -296,5 +303,8 @@ export const DI_PLAN = [
   },
 ].map((w) => ({
   ...w,
-  sets: w.sets.map(([id, name, paper, qs, page, kind, check]) => ({ id, name, paper, qs, page, task: kind === "task", check: !!check })),
+  sets: w.sets.map(([id, name, paper, qs, page, kind, check]) => ({
+    id, name, paper, qs, page, task: kind === "task", check: !!check,
+    videos: kind === "task" ? null : (DI_VIDEOS[id] || []),
+  })),
 }));

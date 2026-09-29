@@ -2481,6 +2481,31 @@ function DIWeekCard({ w, state, onToggle, isOpen, onOpen, current, past, T }) {
   );
 }
 
+/* Watch buttons: each opens a YouTube search for that exact GOAT CAT video
+   title, so there's nothing to look up by hand. */
+function diVideoUrl(paper, n) {
+  const [yr, sl] = paper.split(" S");
+  const q = `GOAT CAT All 114 DILR Sets Solved CAT ${yr} Slot ${sl} Set ${n}`;
+  return `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`;
+}
+function DIWatch({ it, T }) {
+  const vids = it.videos || [];
+  if (!vids.length) {
+    return <div style={{ fontSize: 10.5, color: T.accent2, marginTop: 5 }}>No video (2025 set) — ask Claude for a walkthrough</div>;
+  }
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 5, marginTop: 6 }}>
+      {vids.map((n) => (
+        <a key={n} href={diVideoUrl(it.paper, n)} target="_blank" rel="noopener noreferrer"
+          style={{ fontSize: 10.5, fontWeight: 700, color: T.accent, background: T.card2, border: `1px solid ${T.line}`, borderRadius: 7, padding: "3px 8px", textDecoration: "none", whiteSpace: "nowrap" }}>
+          ▶ {vids.length === 1 ? `Watch Set ${n}` : `Set ${n}`}
+        </a>
+      ))}
+      {vids.length > 1 && <span style={{ fontSize: 10, color: T.dim }}>one of these — the first 30 sec says which</span>}
+    </div>
+  );
+}
+
 function DISetRow({ it, state, onToggle, T }) {
   const done = !!(state.items[it.id] || {}).v;
   return (
@@ -2493,6 +2518,7 @@ function DISetRow({ it, state, onToggle, T }) {
           {it.name}{it.check && <span title="chart may be missing from the book copy" style={{ color: T.accent2, marginLeft: 6, fontStyle: "normal" }}>⚠</span>}
         </div>
         {!it.task && <div style={{ fontSize: 10.5, color: T.dim, marginTop: 2 }}>CAT {it.paper} · {it.qs}</div>}
+        {!it.task && <DIWatch it={it} T={T} />}
       </div>
       {it.page != null && (
         <span style={{ flexShrink: 0, fontSize: 10.5, fontWeight: 700, color: T.mut, background: T.field, border: `1px solid ${T.line}`, borderRadius: 7, padding: "3px 7px" }}>p. {it.page}</span>
