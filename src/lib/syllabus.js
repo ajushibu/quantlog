@@ -173,3 +173,128 @@ export const LRDI_TOPICS = [
   { id: "lrdi-cal", name: "Calendars", count: 3 },
   { id: "lrdi-prac", name: "Practice Set", count: 13 },
 ];
+
+/* ---------------- DI PLAN (8 weeks, 1 hr/day) ----------------
+   Built from the topic-wise CAT PYQ book (2017–2025). Every set is
+   ticked once it's been attempted AND reviewed. Page numbers are the
+   book's own. `check: true` = the set's data may live only in a chart
+   image — if the book copy is missing its table/chart, pull the
+   original slot paper from Cracku. Ids are fixed strings so ticks
+   survive any future reordering. */
+export const DI_DAILY = [
+  "10 min — arithmetic drill: % ↔ fractions, % change, approximation",
+  "25–30 min — solve the set (timer on from week 3)",
+  "20 min — review: retry what you got wrong, then read the solution, then write the one deduction you missed",
+];
+
+export const DI_PLAN = [
+  {
+    id: "di-w1", week: 1, name: "Easy, recent tables", from: "2026-10-01", to: "2026-10-07",
+    rule: "1 set a day, untimed. Day 7: re-solve your 2 worst sets from the week.",
+    sets: [
+      ["di-w1-1", "Registrations (online/offline)", "2023 S3", "Q35-39", 245],
+      ["di-w1-2", "Ratings (averages)", "2024 S2", "Q34-37", 251],
+      ["di-w1-3", "Nutrient table", "2024 S3", "Q30-33", 254],
+      ["di-w1-4", "Distribution (AC dealers)", "2023 S3", "Q25-29", 107],
+      ["di-w1-5", "OTT subscribers", "2024 S3", "Q34-37", 301],
+      ["di-w1-6", "Scores (project & test)", "2023 S3", "Q40-44", 248],
+      ["di-w1-7", "Re-solve 2 worst sets of the week", "", "", null, "task"],
+    ],
+  },
+  {
+    id: "di-w2", week: 2, name: "Harder tables & caselets", from: "2026-10-08", to: "2026-10-14",
+    rule: "1–2 sets a day, untimed. Aim to finish every set, even if slowly.",
+    sets: [
+      ["di-w2-1", "Ratings reconstruction", "2023 S1", "Q35-39", 243],
+      ["di-w2-2", "Ratings & payment (cabs)", "2020 S1", "Q37-40", 234],
+      ["di-w2-3", "College accreditation", "2018 S2", "Q43-46", 230],
+      ["di-w2-4", "Currency exchange", "2018 S2", "Q35-38", 228],
+      ["di-w2-5", "Delivery operations", "2020 S3", "Q31-34", 237],
+      ["di-w2-6", "Currency & travel costs", "2025 S3", "Q29-33", 259],
+      ["di-w2-7", "GDP & population", "2024 S3", "Q38-41", 256],
+      ["di-w2-8", "Ratings & tips (delivery)", "2021 S2", "Q39-44", 240],
+    ],
+  },
+  {
+    id: "di-w3", week: 3, name: "Bar, line & pie charts", from: "2026-10-15", to: "2026-10-21",
+    rule: "1–2 sets a day. Start noting your time on every set.",
+    sets: [
+      ["di-w3-1", "Store sales", "2020 S2", "Q27-30", 280],
+      ["di-w3-2", "LED TV sales (pie)", "2018 S1", "Q51-54", 268],
+      ["di-w3-3", "Dorm repair costs", "2017 S2", "Q47-50", 266, null, true],
+      ["di-w3-4", "Simple Happiness Index", "2017 S1", "Q47-50", 263, null, true],
+      ["di-w3-5", "Sales by subcategory", "2021 S1", "Q41-44", 283],
+      ["di-w3-6", "Mortality study", "2022 S3", "Q25-29", 292],
+      ["di-w3-7", "Salesmen success rates", "2022 S2", "Q25-29", 286],
+      ["di-w3-8", "Pollution Index of states", "2025 S2", "Q42-46", 310],
+      ["di-w3-9", "Recruitment test scores", "2018 S1", "Q63-66", 225],
+    ],
+  },
+  {
+    id: "di-w4", week: 4, name: "Scatter, bubble, radar & unusual charts", from: "2026-10-22", to: "2026-10-28",
+    rule: "Target 25 min a set. New chart type? Attempt first; watch a video solution only if you can't read the chart.",
+    sets: [
+      ["di-w4-1", "Rainfall vs LPA (scatter)", "2019 S2", "Q39-42", 274],
+      ["di-w4-2", "Sustainability Index (scatter)", "2025 S2", "Q38-41", 307],
+      ["di-w4-3", "Revenue, cost & employees", "2022 S2", "Q35-39", 289],
+      ["di-w4-4", "Bubble plots (firms)", "2024 S2", "Q38-41", 298],
+      ["di-w4-5", "Vendor evaluation (radar)", "2019 S1", "Q47-50", 271],
+      ["di-w4-6", "Trade tariffs (radar + bar)", "2025 S1", "Q34-37", 304],
+      ["di-w4-7", "Revenue, cost & profit (triangle plots)", "2019 S2", "Q59-62", 277],
+      ["di-w4-8", "Candlestick chart (shares)", "2024 S1", "Q25-28", 295],
+    ],
+  },
+  {
+    id: "di-w5", week: 5, name: "Remaining sets + mixed", from: "2026-10-29", to: "2026-11-04",
+    rule: "Target 20 min a set. Start scan-and-abandon: no real progress in 6 min → move on.",
+    sets: [
+      ["di-w5-1", "Progress charts (puzzles)", "2025 S3", "Q34-37", 312],
+      ["di-w5-2", "International trade flows", "2025 S3", "Q38-42", 314],
+      ["di-w5-3", "Rural learning study", "2017 S1", "Q39-42", 220, null, true],
+      ["di-w5-4", "Pizza delivery", "2017 S2", "Q35-38", 223, null, true],
+      ["di-w5-5", "Smartphone brands", "2018 S2", "Q63-66", 232, null, true],
+      ["di-w5-6", "Set theory (medicines)", "2020 S1", "Q41-44", 21],
+      ["di-w5-7", "Set theory (countries visited)", "2024 S1", "Q43-46", 34],
+      ["di-w5-8", "Election (security deposits)", "2020 S2", "Q31-36", 92],
+    ],
+  },
+  {
+    id: "di-w6", week: 6, name: "DI-tagged sets from other topics", from: "2026-11-05", to: "2026-11-11",
+    rule: "2 timed sets a day, 20 min each. These mix logic with numbers — exactly what recent CAT does.",
+    sets: [
+      ["di-w6-1", "Election campaign model", "2024 S1", "Q38-42", 113],
+      ["di-w6-2", "Train seat reservations", "2025 S1", "Q38-42", 352],
+      ["di-w6-3", "Call-duration matrix", "2025 S3", "Q43-46", 73],
+      ["di-w6-4", "Scores & ranks", "2023 S2", "Q35-39", 157],
+      ["di-w6-5", "Crime cases & ranks", "2019 S1", "Q51-54", 154],
+      ["di-w6-6", "Orders & ship modes", "2021 S2", "Q25-28", 338],
+      ["di-w6-7", "Project schedule", "2021 S3", "Q29-32", 139],
+      ["di-w6-8", "Games (goals scored)", "2022 S1", "Q25-29", 211],
+    ],
+  },
+  {
+    id: "di-w7", week: 7, name: "Consolidation I", from: "2026-11-12", to: "2026-11-18",
+    rule: "Re-solve failed sets from your mistakes notebook + 2 timed DI sets a day from Rodha's free mocks (mocks.rodha.co.in).",
+    sets: [
+      ["di-w7-1", "Re-solve every week 1–3 set you got wrong", "", "", null, "task"],
+      ["di-w7-2", "Re-solve every week 4–6 set you got wrong", "", "", null, "task"],
+      ["di-w7-3", "Mock DI sets — days 1–3 (6 sets)", "", "", null, "task"],
+      ["di-w7-4", "Mock DI sets — days 4–6 (6 sets)", "", "", null, "task"],
+      ["di-w7-5", "Full DILR sectional (40 min) — scan & rank first", "", "", null, "task"],
+    ],
+  },
+  {
+    id: "di-w8", week: 8, name: "Consolidation II", from: "2026-11-19", to: "2026-11-25",
+    rule: "Same as week 7. Nov 26–28: light revision only — no new sets.",
+    sets: [
+      ["di-w8-1", "Re-solve anything still wrong from week 7", "", "", null, "task"],
+      ["di-w8-2", "Mock DI sets — days 1–3 (6 sets)", "", "", null, "task"],
+      ["di-w8-3", "Mock DI sets — days 4–6 (6 sets)", "", "", null, "task"],
+      ["di-w8-4", "Full DILR sectional (40 min) — scan & rank first", "", "", null, "task"],
+      ["di-w8-5", "Read your mistakes notebook once, end to end", "", "", null, "task"],
+    ],
+  },
+].map((w) => ({
+  ...w,
+  sets: w.sets.map(([id, name, paper, qs, page, kind, check]) => ({ id, name, paper, qs, page, task: kind === "task", check: !!check })),
+}));

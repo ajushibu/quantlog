@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { api, getCode, setCode, clearCode, fetchPhotoUrl } from "@/lib/api";
 import { THEMES, THEME_KEY } from "@/lib/themes";
-import { SECTIONS, ALL_ITEMS, ITEM_BY_ID, CLASSIFY_LIST, LRDI_TOPICS } from "@/lib/syllabus";
+import { SECTIONS, ALL_ITEMS, ITEM_BY_ID, CLASSIFY_LIST, LRDI_TOPICS, DI_PLAN, DI_DAILY } from "@/lib/syllabus";
 import { LRDI_NOTES } from "@/lib/lrdiNotes";
 
 /* LRDI has no classes/sets — each topic is a run of numbered video-chips.
@@ -22,8 +22,19 @@ const LRDI_SECTION = {
       .map((n) => ({ id: `${t.id}-${n}`, kind: "v", name: `${t.name} ${n}`, lrdiTopic: t.id, lrdiIdx: n }))
   ),
 };
-const ALL_SECTIONS = [...SECTIONS, LRDI_SECTION];
-const LRDI_ITEM_BY_ID = Object.fromEntries(LRDI_SECTION.items.map((it) => [it.id, it]));
+/* DI plan: 8 weekly groups of PYQ sets. Same shape as LRDI (groups over a
+   flat list of tick-once "v" items), so pace, celebrations and the Logic
+   tab count pick it up with no special-casing. Kept out of ALL_ITEMS on
+   purpose — the dashboard pace line is about the class syllabus, and this
+   plan has its own week-by-week dates. */
+const DI_SECTION = {
+  id: "diplan", name: "DI Plan (8 weeks)",
+  groups: DI_PLAN.map((w) => ({ id: w.id, name: `Week ${w.week}: ${w.name}`, count: w.sets.length })),
+  items: DI_PLAN.flatMap((w) => w.sets.map((st) => ({ ...st, kind: "v", diWeek: w.week }))),
+};
+const ALL_SECTIONS = [...SECTIONS, LRDI_SECTION, DI_SECTION];
+const DI_ITEM_BY_ID = Object.fromEntries(DI_SECTION.items.map((it) => [it.id, it]));
+const LRDI_ITEM_BY_ID = { ...Object.fromEntries(LRDI_SECTION.items.map((it) => [it.id, it])), ...DI_ITEM_BY_ID };
 const FULL_ITEM_BY_ID = { ...ITEM_BY_ID, ...LRDI_ITEM_BY_ID };
 /* which section an item id belongs to, used for whole-section celebrations */
 const SECTION_OF_ITEM = Object.fromEntries(ALL_SECTIONS.flatMap((sec) => sec.items.map((it) => [it.id, sec.id])));
@@ -107,7 +118,7 @@ function clustersContaining(itemId) {
 const AREAS = [
   { id: "quant", label: "Quant", sectionIds: ["arith", "algebra", "geo", "num", "mod"] },
   { id: "varc", label: "VARC", sectionIds: ["varc"] },
-  { id: "logic", label: "Logic", sectionIds: ["lrdi"] },
+  { id: "logic", label: "Logic", sectionIds: ["lrdi", "diplan"] },
 ];
 const areaSections = (areaId) => ALL_SECTIONS.filter((s) => (AREAS.find((a) => a.id === areaId)?.sectionIds || []).includes(s.id));
 
@@ -803,13 +814,15 @@ function SectionCard({ s, state, onToggle, onFlag, bankTopics, onOpenBank, onNot
         <MiniRing pct={st.pct} done={st.allDone} T={T} />
         <div style={{ flex: 1 }}>
           <div className="serif" style={{ fontSize: 17.5, fontWeight: 600, color: st.allDone ? T.gold : T.ink }}>{s.name}</div>
-          <div style={{ fontSize: 11.5, color: T.mut, marginTop: 2 }}>{st.clsDone}/{st.clsTotal} classes{st.setsTotal ? ` · ${st.setsDone}/${st.setsTotal} practice sets` : ""}</div>
+          <div style={{ fontSize: 11.5, color: T.mut, marginTop: 2 }}>{s.id === "diplan" ? diHeaderLine(state) : `${st.clsDone}/${st.clsTotal} classes${st.setsTotal ? ` · ${st.setsDone}/${st.setsTotal} practice sets` : ""}`}</div>
         </div>
         {Icon.chevron(open, T.dim)}
       </button>
       {open && (
         <div style={{ padding: "0 12px 12px", display: "flex", flexDirection: "column", gap: 5 }}>
-          {s.id === "lrdi"
+          {s.id === "diplan"
+            ? <DIPlanBody state={state} onToggle={onToggle} T={T} />
+            : s.id === "lrdi"
             ? LRDI_TOPICS.map((t) => <TopicChipRow key={t.id} topic={t} state={state} onToggle={onToggle} onNote={onNote} onDoc={onDoc} T={T} />)
             : s.items.map((it) => it.kind === "s"
               ? <SetRow key={it.id} it={it} state={state} onToggle={onToggle} onFlag={onFlag} hasBank={(bankTopics || []).includes(it.id)} onOpenBank={onOpenBank} onNote={onNote} T={T} />
@@ -2387,6 +2400,103 @@ function TopicChipRow({ topic, state, onToggle, onNote, onDoc, T }) {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+/* ================================================================
+   DI PLAN — week cards with PYQ sets (paper, questions, book page).
+   The week containing today opens by default and is marked "This
+   week"; a behind-schedule count compares ticks against the weeks
+   that have already ended, so it never nags about the current week.
+   ================================================================ */
+const diToday = () => dayKey(new Date());
+function diCurrentWeek(today) {
+  const w = DI_PLAN.find((x) => today >= x.from && today <= x.to);
+  if (w) return w.week;
+  return today < DI_PLAN[0].from ? 0 : DI_PLAN.length + 1;
+}
+function diHeaderLine(state) {
+  const sets = DI_SECTION.items.filter((i) => !i.task);
+  const setsDone = sets.filter((i) => !!(state.items[i.id] || {}).v).length;
+  const cw = diCurrentWeek(diToday());
+  const overdue = DI_SECTION.items.filter((i) => i.diWeek < cw && !(state.items[i.id] || {}).v).length;
+  const wk = cw === 0 ? "starts Oct 1" : cw > DI_PLAN.length ? "plan finished" : `week ${cw} of ${DI_PLAN.length}`;
+  return `${setsDone}/${sets.length} PYQ sets · ${wk}${overdue ? ` · ${overdue} carried over` : ""}`;
+}
+function fmtDI(ds) {
+  return new Date(ds + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+}
+
+function DIPlanBody({ state, onToggle, T }) {
+  const cw = diCurrentWeek(diToday());
+  const [open, setOpen] = useState(() => (cw >= 1 && cw <= DI_PLAN.length ? cw : 1));
+  const [showRoutine, setShowRoutine] = useState(false);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <button onClick={() => setShowRoutine(!showRoutine)} style={{ textAlign: "left", background: T.card2, border: `1px solid ${T.line}`, borderRadius: 12, padding: "10px 12px", color: T.ink, display: "flex", flexDirection: "column", gap: 6 }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, fontWeight: 700, color: T.accent }}>
+          {Icon.book(T.accent, 12)} <span style={{ flex: 1 }}>Daily hour — how to use each set</span> {Icon.chevron(showRoutine, T.dim, 11)}
+        </span>
+        {showRoutine && (
+          <span style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12, color: T.mut, lineHeight: 1.45 }}>
+            {DI_DAILY.map((d) => <span key={d}>• {d}</span>)}
+            <span style={{ color: T.dim, fontSize: 11 }}>Tick a set only after you've reviewed it. Page numbers are from the topic-wise PYQ book; ⚠ means the set's chart may be missing from the book copy — use the original slot paper from Cracku if so.</span>
+          </span>
+        )}
+      </button>
+      {DI_PLAN.map((w) => (
+        <DIWeekCard key={w.id} w={w} state={state} onToggle={onToggle} isOpen={open === w.week} onOpen={() => setOpen(open === w.week ? 0 : w.week)} current={cw === w.week} past={w.week < cw} T={T} />
+      ))}
+    </div>
+  );
+}
+
+function DIWeekCard({ w, state, onToggle, isOpen, onOpen, current, past, T }) {
+  const doneN = w.sets.filter((it) => !!(state.items[it.id] || {}).v).length;
+  const all = doneN === w.sets.length;
+  const behind = past && !all;
+  return (
+    <div style={{ borderRadius: 13, border: `1px solid ${current ? T.accent + "88" : all ? T.gold + "55" : T.line}`, background: current ? T.card2 : "transparent", overflow: "hidden" }}>
+      <button onClick={onOpen} style={{ width: "100%", background: "none", border: "none", color: T.ink, textAlign: "left", padding: "11px 12px", display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 13.5, fontWeight: 700, color: all ? T.gold : T.ink }}>Week {w.week}</span>
+            <span style={{ fontSize: 13, fontWeight: 500, color: all ? T.gold : T.ink }}>{w.name}</span>
+            {current && <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: ".08em", color: T.onAccent, background: T.accent, borderRadius: 6, padding: "2px 6px" }}>THIS WEEK</span>}
+          </div>
+          <div style={{ fontSize: 11, color: behind ? T.accent2 : T.dim, marginTop: 2 }}>
+            {fmtDI(w.from)} – {fmtDI(w.to)} · {doneN}/{w.sets.length}{behind ? " · unfinished — carry into this week" : ""}
+          </div>
+        </div>
+        {Icon.chevron(isOpen, T.dim, 11)}
+      </button>
+      {isOpen && (
+        <div style={{ padding: "0 8px 10px", display: "flex", flexDirection: "column", gap: 4 }}>
+          <div style={{ fontSize: 11.5, color: T.mut, lineHeight: 1.45, padding: "0 4px 6px" }}>{w.rule}</div>
+          {w.sets.map((it) => <DISetRow key={it.id} it={it} state={state} onToggle={onToggle} T={T} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DISetRow({ it, state, onToggle, T }) {
+  const done = !!(state.items[it.id] || {}).v;
+  return (
+    <div className={done ? "completed-pop" : ""} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 6px", borderRadius: 11, background: done ? T.card : "transparent" }}>
+      <button onClick={() => onToggle(it.id, "v")} aria-label={done ? "mark not done" : "mark done"} style={{ width: 24, height: 24, borderRadius: 8, flexShrink: 0, border: `1.5px solid ${done ? T.accent : T.line}`, background: done ? `linear-gradient(90deg, ${T.accent}, ${T.accent2})` : "transparent", display: "grid", placeItems: "center", boxShadow: done ? `0 0 8px ${T.accent}44` : "none" }}>
+        {Icon.check(done ? T.onAccent : "transparent")}
+      </button>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: done ? 600 : 500, color: done ? T.gold : T.ink, lineHeight: 1.3, fontStyle: it.task ? "italic" : "normal" }}>
+          {it.name}{it.check && <span title="chart may be missing from the book copy" style={{ color: T.accent2, marginLeft: 6, fontStyle: "normal" }}>⚠</span>}
+        </div>
+        {!it.task && <div style={{ fontSize: 10.5, color: T.dim, marginTop: 2 }}>CAT {it.paper} · {it.qs}</div>}
+      </div>
+      {it.page != null && (
+        <span style={{ flexShrink: 0, fontSize: 10.5, fontWeight: 700, color: T.mut, background: T.field, border: `1px solid ${T.line}`, borderRadius: 7, padding: "3px 7px" }}>p. {it.page}</span>
+      )}
     </div>
   );
 }
